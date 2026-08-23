@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/localization/app_localizations.dart';
 import '../../../core/data/repository_providers.dart';
 import '../../../core/models/app_models.dart';
+import '../../../core/widgets/ad_banner.dart';
 import '../../item/presentation/item_editor_sheet.dart';
 
 class HomePage extends ConsumerWidget {
@@ -22,7 +23,9 @@ class HomePage extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: PopupMenuButton<String>(
-          onSelected: (value) => context.go('/space/$value/home'),
+          onSelected: (value) => value == '__spaces__'
+              ? context.go('/spaces')
+              : context.go('/space/$value/home'),
           itemBuilder: (context) => [
             for (final other in spaces)
               PopupMenuItem(value: other.id, child: Text(other.name)),
@@ -113,6 +116,7 @@ class HomePage extends ConsumerWidget {
           ],
         ),
       ),
+      bottomNavigationBar: const AdBanner(),
     );
   }
 

@@ -9,24 +9,39 @@ abstract interface class AppRepository {
   AppUser? get signedInUser;
 
   Future<AppUser?> currentUser();
+  Stream<AppUser?> watchAuthState();
   Future<void> signIn(SocialProvider provider);
+  Future<void> linkIdentity(SocialProvider provider);
   Future<void> signOut();
   Future<void> deleteAccount();
+  Future<void> registerDevice({
+    required String platform,
+    required String token,
+    String? appVersion,
+  });
+  Future<List<AppNotice>> listNotices();
   Future<String> acceptInvite(String code);
 
   Future<List<Space>> listSpaces();
-  Future<Space> createSpace({required String name, required String iconKey});
+  Future<List<Space>> listDeletedSpaces();
+  Future<Space> createSpace({
+    required String name,
+    required String iconKey,
+    String? iconColor,
+  });
   Future<void> updateSpace(Space space);
   Future<void> softDeleteSpace(Space space);
   Future<void> restoreSpace(Space space);
   Future<List<SpaceMember>> listMembers(String spaceId);
   Future<void> updateMemberRole(SpaceMember member, String role);
+  Future<void> updateMemberDisplayName(SpaceMember member, String displayName);
   Future<SpaceInvite> createInvite(String spaceId, Duration validity);
   Future<void> revokeInvite(SpaceInvite invite);
   Future<void> leaveSpace(String spaceId);
   Future<void> updateLastAccessed(String spaceId);
 
   Future<List<FloorPlan>> listFloorPlans(String spaceId);
+  Future<List<FloorPlan>> listDeletedFloorPlans(String spaceId);
   Future<FloorPlan> createFloorPlan({
     required String spaceId,
     required String name,
@@ -36,12 +51,19 @@ abstract interface class AppRepository {
   Future<void> restoreFloorPlan(FloorPlan floorPlan);
 
   Future<List<Location>> listLocations(String floorPlanId);
+  Future<List<Location>> listDeletedLocations(String spaceId);
   Future<Location> saveLocation(Location location, {required bool isNew});
   Future<void> softDeleteLocation(Location location);
   Future<void> restoreLocation(Location location);
 
   Future<List<Category>> listCategories(String spaceId);
+  Future<Category> createCategory({
+    required String spaceId,
+    required String name,
+  });
+  Future<void> deleteCategory(Category category);
   Future<List<Item>> listItems(String spaceId, {String? search});
+  Future<List<Item>> listDeletedItems(String spaceId);
   Future<Item> saveItem(Item item, {required bool isNew});
   Future<void> softDeleteItem(Item item);
   Future<void> restoreItem(Item item);
@@ -69,6 +91,10 @@ abstract interface class AppRepository {
   Future<void> deleteShoppingItem(ShoppingItem item);
 
   Future<List<Checklist>> listChecklists({String? spaceId});
+  Future<List<ChecklistTemplate>> listChecklistTemplates();
+  Future<List<ChecklistTemplateItem>> listChecklistTemplateItems(
+    String templateId,
+  );
   Future<List<ChecklistItem>> listChecklistItems(String checklistId);
   Future<Checklist> createChecklist({
     String? spaceId,

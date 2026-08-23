@@ -13,8 +13,20 @@ final currentUserProvider = FutureProvider<AppUser?>((ref) {
   return ref.watch(appRepositoryProvider).currentUser();
 });
 
+final authStateProvider = StreamProvider<AppUser?>((ref) {
+  return ref.watch(appRepositoryProvider).watchAuthState();
+});
+
 final spacesProvider = FutureProvider<List<Space>>((ref) {
   return ref.watch(appRepositoryProvider).listSpaces();
+});
+
+final deletedSpacesProvider = FutureProvider<List<Space>>((ref) {
+  return ref.watch(appRepositoryProvider).listDeletedSpaces();
+});
+
+final noticesProvider = FutureProvider<List<AppNotice>>((ref) {
+  return ref.watch(appRepositoryProvider).listNotices();
 });
 
 final floorPlansProvider = FutureProvider.family<List<FloorPlan>, String>((
@@ -24,11 +36,23 @@ final floorPlansProvider = FutureProvider.family<List<FloorPlan>, String>((
   return ref.watch(appRepositoryProvider).listFloorPlans(spaceId);
 });
 
+final deletedFloorPlansProvider =
+    FutureProvider.family<List<FloorPlan>, String>((ref, spaceId) {
+      return ref.watch(appRepositoryProvider).listDeletedFloorPlans(spaceId);
+    });
+
 final locationsProvider = FutureProvider.family<List<Location>, String>((
   ref,
   floorPlanId,
 ) {
   return ref.watch(appRepositoryProvider).listLocations(floorPlanId);
+});
+
+final deletedLocationsProvider = FutureProvider.family<List<Location>, String>((
+  ref,
+  spaceId,
+) {
+  return ref.watch(appRepositoryProvider).listDeletedLocations(spaceId);
 });
 
 final categoriesProvider = FutureProvider.family<List<Category>, String>((
@@ -48,6 +72,18 @@ final itemsProvider =
           .listItems(args.spaceId, search: args.search);
     });
 
+final deletedItemsProvider = FutureProvider.family<List<Item>, String>((
+  ref,
+  spaceId,
+) {
+  return ref.watch(appRepositoryProvider).listDeletedItems(spaceId);
+});
+
+final itemLocationHistoryProvider =
+    FutureProvider.family<List<ItemLocationHistory>, String>((ref, itemId) {
+      return ref.watch(appRepositoryProvider).listItemLocationHistory(itemId);
+    });
+
 final shoppingItemsProvider = FutureProvider.family<List<ShoppingItem>, String>(
   (ref, spaceId) {
     return ref.watch(appRepositoryProvider).listShoppingItems(spaceId);
@@ -65,6 +101,22 @@ final checklistsProvider = FutureProvider.family<List<Checklist>, String?>((
 ) {
   return ref.watch(appRepositoryProvider).listChecklists(spaceId: spaceId);
 });
+
+final checklistTemplatesProvider = FutureProvider<List<ChecklistTemplate>>((
+  ref,
+) {
+  return ref.watch(appRepositoryProvider).listChecklistTemplates();
+});
+
+final checklistTemplateItemsProvider =
+    FutureProvider.family<List<ChecklistTemplateItem>, String>((
+      ref,
+      templateId,
+    ) {
+      return ref
+          .watch(appRepositoryProvider)
+          .listChecklistTemplateItems(templateId);
+    });
 
 final checklistItemsProvider =
     FutureProvider.family<List<ChecklistItem>, String>((ref, checklistId) {
@@ -103,8 +155,13 @@ class WorkspaceActions {
   Future<Space> createSpace({
     required String name,
     required String iconKey,
+    String? iconColor,
   }) async {
-    final space = await _repository.createSpace(name: name, iconKey: iconKey);
+    final space = await _repository.createSpace(
+      name: name,
+      iconKey: iconKey,
+      iconColor: iconColor,
+    );
     ref.invalidate(spacesProvider);
     ref.invalidate(floorPlansProvider(space.id));
     return space;
@@ -118,11 +175,35 @@ class WorkspaceActions {
   Future<void> deleteSpace(Space space) async {
     await _repository.softDeleteSpace(space);
     ref.invalidate(spacesProvider);
+    ref.invalidate(deletedSpacesProvider);
+  }
+
+  Future<void> revokeInvite(SpaceInvite invite) async {
+    await _repository.revokeInvite(invite);
+  }
+
+  Future<SpaceInvite> createInvite(
+    String spaceId, {
+    Duration validity = const Duration(days: 7),
+  }) => _repository.createInvite(spaceId, validity);
+
+  Future<void> updateMemberRole(SpaceMember member, String role) async {
+    await _repository.updateMemberRole(member, role);
+    ref.invalidate(spaceMembersProvider(member.spaceId));
+  }
+
+  Future<void> updateMemberDisplayName(
+    SpaceMember member,
+    String displayName,
+  ) async {
+    await _repository.updateMemberDisplayName(member, displayName);
+    ref.invalidate(spaceMembersProvider(member.spaceId));
   }
 
   Future<void> restoreSpace(Space space) async {
     await _repository.restoreSpace(space);
     ref.invalidate(spacesProvider);
+    ref.invalidate(deletedSpacesProvider);
   }
 
   Future<String> acceptInvite(String code) async {
@@ -168,6 +249,7 @@ class WorkspaceActions {
     ref.invalidate(floorPlansProvider(plan.spaceId));
     ref.invalidate(locationsProvider(plan.id));
     ref.invalidate(itemsProvider((spaceId: plan.spaceId, search: null)));
+    ref.invalidate(deletedFloorPlansProvider(plan.spaceId));
   }
 
   Future<void> restoreFloorPlan(FloorPlan plan) async {
@@ -175,6 +257,7 @@ class WorkspaceActions {
     ref.invalidate(floorPlansProvider(plan.spaceId));
     ref.invalidate(locationsProvider(plan.id));
     ref.invalidate(itemsProvider((spaceId: plan.spaceId, search: null)));
+    ref.invalidate(deletedFloorPlansProvider(plan.spaceId));
   }
 
   Future<Location> saveLocation(
@@ -190,12 +273,33 @@ class WorkspaceActions {
     await _repository.softDeleteLocation(location);
     ref.invalidate(locationsProvider(location.floorPlanId));
     ref.invalidate(itemsProvider((spaceId: location.spaceId, search: null)));
+    ref.invalidate(deletedLocationsProvider(location.spaceId));
   }
 
   Future<void> restoreLocation(Location location) async {
     await _repository.restoreLocation(location);
     ref.invalidate(locationsProvider(location.floorPlanId));
     ref.invalidate(itemsProvider((spaceId: location.spaceId, search: null)));
+    ref.invalidate(deletedLocationsProvider(location.spaceId));
+  }
+
+  Future<Category> createCategory({
+    required String spaceId,
+    required String name,
+  }) async {
+    final category = await _repository.createCategory(
+      spaceId: spaceId,
+      name: name,
+    );
+    ref.invalidate(categoriesProvider(spaceId));
+    return category;
+  }
+
+  Future<void> deleteCategory(Category category) async {
+    await _repository.deleteCategory(category);
+    if (category.spaceId != null) {
+      ref.invalidate(categoriesProvider(category.spaceId!));
+    }
   }
 
   Future<Item> saveItem(Item item, {required bool isNew}) async {
@@ -207,11 +311,13 @@ class WorkspaceActions {
   Future<void> deleteItem(Item item) async {
     await _repository.softDeleteItem(item);
     ref.invalidate(itemsProvider((spaceId: item.spaceId, search: null)));
+    ref.invalidate(deletedItemsProvider(item.spaceId));
   }
 
   Future<void> restoreItem(Item item) async {
     await _repository.restoreItem(item);
     ref.invalidate(itemsProvider((spaceId: item.spaceId, search: null)));
+    ref.invalidate(deletedItemsProvider(item.spaceId));
   }
 
   Future<void> toggleFavorite(Item item) async {
@@ -231,6 +337,7 @@ class WorkspaceActions {
     );
     ref.invalidate(itemsProvider((spaceId: item.spaceId, search: null)));
     ref.invalidate(itemsProvider((spaceId: targetSpaceId, search: null)));
+    ref.invalidate(itemLocationHistoryProvider(item.id));
     return moved;
   }
 

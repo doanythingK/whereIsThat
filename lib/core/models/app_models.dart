@@ -274,7 +274,7 @@ class Item {
     deletePurgeAt: json['delete_purge_at'] == null
         ? null
         : DateTime.parse(json['delete_purge_at'].toString()),
-    isFavorite: json['isFavorite'] as bool? ?? false,
+    isFavorite: (json['isFavorite'] ?? json['is_favorite']) as bool? ?? false,
     photos: ((json['photos'] as List?) ?? const [])
         .map(
           (photo) =>
@@ -451,4 +451,44 @@ abstract class ChecklistMemberCheck with _$ChecklistMemberCheck {
 
   factory ChecklistMemberCheck.fromJson(Map<String, dynamic> json) =>
       _$ChecklistMemberCheckFromJson(json);
+}
+
+class ChecklistTemplate {
+  const ChecklistTemplate({
+    required this.id,
+    required this.name,
+    this.templateType = 'system',
+  });
+
+  final String id;
+  final String name;
+  final String templateType;
+}
+
+class ChecklistTemplateItem {
+  const ChecklistTemplateItem({
+    required this.id,
+    required this.templateId,
+    required this.name,
+    this.sortOrder = 0,
+  });
+
+  final String id;
+  final String templateId;
+  final String name;
+  final double sortOrder;
+}
+
+class AppNotice {
+  const AppNotice({
+    required this.id,
+    required this.title,
+    required this.body,
+    this.importance = 'normal',
+  });
+
+  final String id;
+  final String title;
+  final String body;
+  final String importance;
 }

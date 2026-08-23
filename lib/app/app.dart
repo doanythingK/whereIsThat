@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'localization/app_localizations.dart';
 import 'router/app_router.dart';
 import 'theme/app_theme.dart';
+import 'theme/theme_providers.dart';
 
 class WhereIsThatApp extends ConsumerWidget {
   const WhereIsThatApp({super.key});
@@ -15,7 +16,7 @@ class WhereIsThatApp extends ConsumerWidget {
       title: '엄마 이거 어딨어?',
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
-      themeMode: ThemeMode.system,
+      themeMode: ref.watch(themeModeProvider),
       localizationsDelegates: const [
         AppLocalizations.delegate,
         GlobalMaterialLocalizations.delegate,

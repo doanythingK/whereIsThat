@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/localization/app_localizations.dart';
 import '../../../core/data/repository_providers.dart';
 import '../../../core/models/app_models.dart';
+import 'item_detail_sheet.dart';
 import 'item_editor_sheet.dart';
 
 class ItemListPage extends ConsumerStatefulWidget {
@@ -124,7 +125,12 @@ class _ItemTile extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return Card(
       child: ListTile(
-        onTap: onEdit,
+        onTap: () => showModalBottomSheet<void>(
+          context: context,
+          isScrollControlled: true,
+          builder: (_) => ItemDetailSheet(item: item),
+        ),
+        onLongPress: onEdit,
         leading: CircleAvatar(
           child: Icon(
             item.visibility == 'private'

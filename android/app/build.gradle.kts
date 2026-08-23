@@ -6,10 +6,9 @@ plugins {
 
 android {
     namespace = "com.doanythingk.where_is_that"
-    // Keep the dev build reproducible with the Android SDK already installed
-    // on the project verification machine. Native plugins can raise this when
-    // they are introduced with an explicit migration.
-    compileSdk = 34
+    // Current Flutter plugins in the MVP (Firebase, image picker, and ads)
+    // require the Android 36 compile API. This does not raise targetSdk.
+    compileSdk = 36
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -23,6 +22,9 @@ android {
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
         targetSdk = 34
+        // Google test App ID. Replace it in the release flavor with the
+        // production App ID before enabling ADS_ENABLED.
+        manifestPlaceholders["ADMOB_APP_ID"] = "ca-app-pub-3940256099942544~3347511713"
         // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
         // is added automatically by Flutter. (https://developer.android.com/studio/build/configure-apk-splits#configure-APK-versions)
         // You can force using the value of versionCode by specifying the `-P force-version-code-ignoring-abi=true`

@@ -108,6 +108,38 @@ class ShoppingPage extends ConsumerWidget {
     }
   }
 
+  Future<void> _assign(
+    BuildContext context,
+    WidgetRef ref,
+    ShoppingItem item,
+  ) async {
+    final members =
+        ref.read(spaceMembersProvider(spaceId)).value ?? const <SpaceMember>[];
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('담당자 선택'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, ''),
+            child: const Text('담당자 없음'),
+          ),
+          for (final member in members)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, member.userId),
+              child: Text(member.displayName ?? member.userId),
+            ),
+        ],
+      ),
+    );
+    if (selected == null) return;
+    await ref
+        .read(workspaceActionsProvider)
+        .updateShoppingItem(
+          item.copyWith(assigneeUserId: selected.isEmpty ? null : selected),
+        );
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final items = ref.watch(shoppingItemsStreamProvider(spaceId));
@@ -124,8 +156,10 @@ class ShoppingPage extends ConsumerWidget {
         data: (values) => values.isEmpty
             ? Center(child: Text(context.l10n.shoppingEmpty))
             : RefreshIndicator(
-                onRefresh: () async =>
-                    ref.invalidate(shoppingItemsProvider(spaceId)),
+                onRefresh: () async {
+                  ref.invalidate(shoppingItemsProvider(spaceId));
+                  ref.invalidate(shoppingItemsStreamProvider(spaceId));
+                },
                 child: ReorderableListView.builder(
                   padding: const EdgeInsets.fromLTRB(12, 12, 12, 100),
                   itemCount: values.length,
@@ -170,7 +204,20 @@ class ShoppingPage extends ConsumerWidget {
                           subtitle: item.assigneeUserId == null
                               ? null
                               : const Text('담당자 지정됨'),
-                          secondary: const Icon(Icons.drag_handle),
+                          secondary: PopupMenuButton<String>(
+                            onSelected: (value) {
+                              if (value == 'assign') {
+                                _assign(context, ref, item);
+                              }
+                            },
+                            itemBuilder: (context) => const [
+                              PopupMenuItem(
+                                value: 'assign',
+                                child: Text('담당자 지정'),
+                              ),
+                            ],
+                            icon: const Icon(Icons.person_outline),
+                          ),
                         ),
                       ),
                     );

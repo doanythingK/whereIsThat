@@ -287,6 +287,10 @@ create table if not exists public.app_config (
   updated_at timestamptz not null default now()
 );
 
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on all tables in schema public to authenticated;
+grant usage, select on all sequences in schema public to authenticated;
+
 create or replace function public.is_space_member(target_space_id uuid, target_user_id uuid)
 returns boolean
 language sql
@@ -386,6 +390,93 @@ $$;
 drop trigger if exists enforce_space_member_limit_trigger on public.space_members;
 create trigger enforce_space_member_limit_trigger before insert or update on public.space_members
 for each row execute procedure public.enforce_space_member_limit();
+
+create or replace function public.prevent_last_space_admin()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if old.deleted_at is null
+     and (new.deleted_at is not null or new.role <> 'admin')
+     and old.role = 'admin'
+     and not exists (
+       select 1 from public.space_members
+       where space_id = old.space_id
+         and role = 'admin'
+         and deleted_at is null
+         and id <> old.id
+     ) then
+    raise exception 'space_requires_one_admin';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists prevent_last_space_admin_trigger on public.space_members;
+create trigger prevent_last_space_admin_trigger before update on public.space_members
+for each row execute procedure public.prevent_last_space_admin();
+
+create or replace function public.prevent_created_by_change()
+returns trigger
+language plpgsql
+as $$
+begin
+  if old.created_by is distinct from new.created_by then
+    raise exception 'created_by_is_immutable';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists prevent_floor_plan_created_by_change on public.floor_plans;
+create trigger prevent_floor_plan_created_by_change before update on public.floor_plans
+for each row execute procedure public.prevent_created_by_change();
+drop trigger if exists prevent_location_created_by_change on public.locations;
+create trigger prevent_location_created_by_change before update on public.locations
+for each row execute procedure public.prevent_created_by_change();
+
+create or replace function public.validate_item_location_space()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.location_id is not null and not exists (
+    select 1 from public.locations
+    where id = new.location_id
+      and space_id = new.space_id
+      and deleted_at is null
+  ) then
+    raise exception 'item_location_space_mismatch';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists validate_item_location_space_trigger on public.items;
+create trigger validate_item_location_space_trigger before insert or update on public.items
+for each row execute procedure public.validate_item_location_space();
+
+create or replace function public.validate_location_floor_plan_space()
+returns trigger
+language plpgsql
+as $$
+begin
+  if not exists (
+    select 1 from public.floor_plans
+    where id = new.floor_plan_id
+      and space_id = new.space_id
+  ) then
+    raise exception 'location_floor_plan_space_mismatch';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists validate_location_floor_plan_space_trigger on public.locations;
+create trigger validate_location_floor_plan_space_trigger before insert or update on public.locations
+for each row execute procedure public.validate_location_floor_plan_space();
 
 create or replace function public.prevent_last_floor_plan_delete()
 returns trigger
@@ -497,9 +588,11 @@ security definer
 set search_path = public
 as $$
 declare target_space uuid;
+declare purge_at timestamptz;
 begin
-  select space_id into target_space from public.locations where id = target_location_id;
+  select space_id, delete_purge_at into target_space, purge_at from public.locations where id = target_location_id;
   if not public.is_space_member(target_space, auth.uid()) then raise exception 'not_allowed'; end if;
+  if purge_at is not null and purge_at <= now() then raise exception 'retention_period_expired'; end if;
   update public.locations set deleted_at = null, delete_purge_at = null where id = target_location_id;
   update public.items i set location_id = r.location_id, updated_at = now()
     from public.item_location_recovery r
@@ -516,9 +609,11 @@ security definer
 set search_path = public
 as $$
 declare target_space uuid;
+declare purge_at timestamptz;
 begin
-  select space_id into target_space from public.floor_plans where id = target_floor_plan_id;
+  select space_id, delete_purge_at into target_space, purge_at from public.floor_plans where id = target_floor_plan_id;
   if not public.is_space_member(target_space, auth.uid()) then raise exception 'not_allowed'; end if;
+  if purge_at is not null and purge_at <= now() then raise exception 'retention_period_expired'; end if;
   update public.floor_plans set deleted_at = now(), delete_purge_at = now() + interval '30 days'
     where id = target_floor_plan_id and deleted_at is null;
   update public.locations set deleted_at = now(), delete_purge_at = now() + interval '30 days'
@@ -533,9 +628,12 @@ security definer
 set search_path = public
 as $$
 declare target_space uuid;
+declare purge_at timestamptz;
 begin
-  select space_id into target_space from public.floor_plans where id = target_floor_plan_id;
+  select space_id, delete_purge_at into target_space, purge_at
+    from public.floor_plans where id = target_floor_plan_id;
   if not public.is_space_member(target_space, auth.uid()) then raise exception 'not_allowed'; end if;
+  if purge_at is null or purge_at <= now() then raise exception 'retention_period_expired'; end if;
   update public.floor_plans set deleted_at = null, delete_purge_at = null where id = target_floor_plan_id;
   update public.locations set deleted_at = null, delete_purge_at = null where floor_plan_id = target_floor_plan_id;
   update public.items i set location_id = r.location_id, updated_at = now()
@@ -543,6 +641,9 @@ begin
     join public.locations l on l.id = r.location_id
     where l.floor_plan_id = target_floor_plan_id and r.item_id = i.id
       and i.location_id is null and i.deleted_at is null;
+  update public.item_location_recovery r set recovered_at = now()
+    from public.locations l
+    where r.location_id = l.id and l.floor_plan_id = target_floor_plan_id;
 end;
 $$;
 
@@ -557,7 +658,10 @@ declare target_member_count integer;
 begin
   select * into invite_row from public.space_invites
   where upper(code) = upper(invite_code) for update;
-  if invite_row.id is null or invite_row.revoked_at is not null or invite_row.expires_at <= now() then
+  if invite_row.id is null
+     or invite_row.revoked_at is not null
+     or invite_row.expires_at <= now()
+     or (invite_row.max_uses is not null and invite_row.use_count >= invite_row.max_uses) then
     raise exception 'invite_invalid';
   end if;
   select count(*) into target_member_count from public.space_members where space_id = invite_row.space_id and deleted_at is null;
@@ -578,6 +682,41 @@ set search_path = public
 as $$
 begin
   update public.profiles set deleted_at = now(), updated_at = now() where id = auth.uid();
+end;
+$$;
+
+create or replace function public.restore_space(target_space_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare purge_at timestamptz;
+begin
+  select delete_purge_at into purge_at from public.spaces
+    where id = target_space_id and deleted_at is not null;
+  if not public.is_space_admin(target_space_id, auth.uid()) then raise exception 'not_allowed'; end if;
+  if purge_at is null or purge_at <= now() then raise exception 'retention_period_expired'; end if;
+  update public.spaces set deleted_at = null, delete_purge_at = null, updated_at = now()
+    where id = target_space_id;
+end;
+$$;
+
+create or replace function public.restore_item(target_item_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare target_space uuid;
+declare purge_at timestamptz;
+begin
+  select space_id, delete_purge_at into target_space, purge_at from public.items
+    where id = target_item_id and deleted_at is not null;
+  if not public.is_space_member(target_space, auth.uid()) then raise exception 'not_allowed'; end if;
+  if purge_at is null or purge_at <= now() then raise exception 'retention_period_expired'; end if;
+  update public.items set deleted_at = null, delete_purge_at = null, updated_at = now()
+    where id = target_item_id;
 end;
 $$;
 
@@ -613,6 +752,8 @@ grant execute on function public.soft_delete_location(uuid) to authenticated;
 grant execute on function public.restore_location(uuid) to authenticated;
 grant execute on function public.soft_delete_floor_plan(uuid) to authenticated;
 grant execute on function public.restore_floor_plan(uuid) to authenticated;
+grant execute on function public.restore_space(uuid) to authenticated;
+grant execute on function public.restore_item(uuid) to authenticated;
 
 do $$
 declare table_name text;
@@ -662,15 +803,31 @@ drop policy if exists member_select on public.space_members;
 create policy member_select on public.space_members for select using (public.is_space_member(space_id, auth.uid()));
 drop policy if exists member_admin_update on public.space_members;
 create policy member_admin_update on public.space_members for update using (public.is_space_admin(space_id, auth.uid())) with check (public.is_space_admin(space_id, auth.uid()));
+drop policy if exists member_self_update on public.space_members;
+create policy member_self_update on public.space_members for update using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 drop policy if exists invite_admin_all on public.space_invites;
 create policy invite_admin_all on public.space_invites for all using (public.is_space_admin(space_id, auth.uid())) with check (public.is_space_admin(space_id, auth.uid()));
 
 drop policy if exists floor_plan_member_all on public.floor_plans;
-create policy floor_plan_member_all on public.floor_plans for all using (public.is_space_member(space_id, auth.uid())) with check (public.is_space_member(space_id, auth.uid()) and created_by = auth.uid());
+drop policy if exists floor_plan_member_select on public.floor_plans;
+create policy floor_plan_member_select on public.floor_plans for select using (public.is_space_member(space_id, auth.uid()));
+drop policy if exists floor_plan_member_insert on public.floor_plans;
+create policy floor_plan_member_insert on public.floor_plans for insert with check (public.is_space_member(space_id, auth.uid()) and created_by = auth.uid());
+drop policy if exists floor_plan_member_update on public.floor_plans;
+create policy floor_plan_member_update on public.floor_plans for update using (public.is_space_member(space_id, auth.uid())) with check (public.is_space_member(space_id, auth.uid()));
+drop policy if exists floor_plan_member_delete on public.floor_plans;
+create policy floor_plan_member_delete on public.floor_plans for delete using (public.is_space_member(space_id, auth.uid()));
 
 drop policy if exists location_member_all on public.locations;
-create policy location_member_all on public.locations for all using (public.is_space_member(space_id, auth.uid())) with check (public.is_space_member(space_id, auth.uid()) and created_by = auth.uid());
+drop policy if exists location_member_select on public.locations;
+create policy location_member_select on public.locations for select using (public.is_space_member(space_id, auth.uid()));
+drop policy if exists location_member_insert on public.locations;
+create policy location_member_insert on public.locations for insert with check (public.is_space_member(space_id, auth.uid()) and created_by = auth.uid());
+drop policy if exists location_member_update on public.locations;
+create policy location_member_update on public.locations for update using (public.is_space_member(space_id, auth.uid())) with check (public.is_space_member(space_id, auth.uid()));
+drop policy if exists location_member_delete on public.locations;
+create policy location_member_delete on public.locations for delete using (public.is_space_member(space_id, auth.uid()));
 
 drop policy if exists category_member_select on public.categories;
 create policy category_member_select on public.categories for select using (space_id is null or public.is_space_member(space_id, auth.uid()));
@@ -680,35 +837,35 @@ create policy category_member_write on public.categories for all using (space_id
 drop policy if exists item_visibility_select on public.items;
 create policy item_visibility_select on public.items for select using (
   public.is_space_member(space_id, auth.uid())
-  and (visibility = 'shared' or created_by = auth.uid())
+  and (visibility = 'shared' or created_by = auth.uid() or owner_user_id = auth.uid())
 );
 drop policy if exists item_member_insert on public.items;
 create policy item_member_insert on public.items for insert with check (
   public.is_space_member(space_id, auth.uid()) and created_by = auth.uid()
-  and (visibility = 'shared' or created_by = auth.uid())
+  and (visibility = 'shared' or owner_user_id = auth.uid() or owner_user_id is null)
 );
 drop policy if exists item_member_update on public.items;
 create policy item_member_update on public.items for update using (
-  public.is_space_member(space_id, auth.uid()) and (visibility = 'shared' or created_by = auth.uid())
+  public.is_space_member(space_id, auth.uid()) and (visibility = 'shared' or created_by = auth.uid() or owner_user_id = auth.uid())
 ) with check (
-  public.is_space_member(space_id, auth.uid()) and (visibility = 'shared' or created_by = auth.uid())
+  public.is_space_member(space_id, auth.uid()) and (visibility = 'shared' or created_by = auth.uid() or owner_user_id = auth.uid())
 );
 
 drop policy if exists item_photo_visibility on public.item_photos;
 create policy item_photo_visibility on public.item_photos for all using (
-  exists (select 1 from public.items i where i.id = item_id and public.is_space_member(i.space_id, auth.uid()) and (i.visibility = 'shared' or i.created_by = auth.uid()))
+  exists (select 1 from public.items i where i.id = item_id and public.is_space_member(i.space_id, auth.uid()) and (i.visibility = 'shared' or i.created_by = auth.uid() or i.owner_user_id = auth.uid()))
 ) with check (
-  exists (select 1 from public.items i where i.id = item_id and public.is_space_member(i.space_id, auth.uid()) and (i.visibility = 'shared' or i.created_by = auth.uid()))
+  exists (select 1 from public.items i where i.id = item_id and public.is_space_member(i.space_id, auth.uid()) and (i.visibility = 'shared' or i.created_by = auth.uid() or i.owner_user_id = auth.uid()))
 );
 
 drop policy if exists item_history_visibility on public.item_location_history;
 create policy item_history_visibility on public.item_location_history for select using (
-  exists (select 1 from public.items i where i.id = item_id and public.is_space_member(i.space_id, auth.uid()) and (i.visibility = 'shared' or i.created_by = auth.uid()))
+  exists (select 1 from public.items i where i.id = item_id and public.is_space_member(i.space_id, auth.uid()) and (i.visibility = 'shared' or i.created_by = auth.uid() or i.owner_user_id = auth.uid()))
 );
 
 drop policy if exists item_recovery_internal on public.item_location_recovery;
 create policy item_recovery_internal on public.item_location_recovery for select using (
-  exists (select 1 from public.items i where i.id = item_id and public.is_space_member(i.space_id, auth.uid()) and (i.visibility = 'shared' or i.created_by = auth.uid()))
+  exists (select 1 from public.items i where i.id = item_id and public.is_space_member(i.space_id, auth.uid()) and (i.visibility = 'shared' or i.created_by = auth.uid() or i.owner_user_id = auth.uid()))
 );
 
 drop policy if exists item_favorite_self on public.item_favorites;
@@ -717,7 +874,14 @@ create policy item_favorite_self on public.item_favorites for all using (user_id
 drop policy if exists shopping_list_member on public.shopping_lists;
 create policy shopping_list_member on public.shopping_lists for all using (public.is_space_member(space_id, auth.uid())) with check (public.is_space_member(space_id, auth.uid()));
 drop policy if exists shopping_item_member on public.shopping_items;
-create policy shopping_item_member on public.shopping_items for all using (public.is_space_member(space_id, auth.uid())) with check (public.is_space_member(space_id, auth.uid()) and created_by = auth.uid());
+drop policy if exists shopping_item_member_select on public.shopping_items;
+create policy shopping_item_member_select on public.shopping_items for select using (public.is_space_member(space_id, auth.uid()));
+drop policy if exists shopping_item_member_insert on public.shopping_items;
+create policy shopping_item_member_insert on public.shopping_items for insert with check (public.is_space_member(space_id, auth.uid()) and created_by = auth.uid());
+drop policy if exists shopping_item_member_update on public.shopping_items;
+create policy shopping_item_member_update on public.shopping_items for update using (public.is_space_member(space_id, auth.uid())) with check (public.is_space_member(space_id, auth.uid()));
+drop policy if exists shopping_item_member_delete on public.shopping_items;
+create policy shopping_item_member_delete on public.shopping_items for delete using (public.is_space_member(space_id, auth.uid()));
 
 drop policy if exists checklist_template_self on public.checklist_templates;
 create policy checklist_template_self on public.checklist_templates for all using (owner_user_id is null or owner_user_id = auth.uid()) with check (owner_user_id is null or owner_user_id = auth.uid());
@@ -766,6 +930,27 @@ values
   ('00000000-0000-0000-0000-000000000105', 'system', '입원')
 on conflict (id) do nothing;
 
+insert into public.checklist_template_items(template_id, name, sort_order)
+select template_id, item_name, item_order
+from (values
+  ('00000000-0000-0000-0000-000000000101'::uuid, '여권/신분증', 0::numeric),
+  ('00000000-0000-0000-0000-000000000101'::uuid, '충전기', 1::numeric),
+  ('00000000-0000-0000-0000-000000000101'::uuid, '상비약', 2::numeric),
+  ('00000000-0000-0000-0000-000000000102'::uuid, '신분증', 0::numeric),
+  ('00000000-0000-0000-0000-000000000102'::uuid, '세면도구', 1::numeric),
+  ('00000000-0000-0000-0000-000000000103'::uuid, '랜턴', 0::numeric),
+  ('00000000-0000-0000-0000-000000000103'::uuid, '버너/연료', 1::numeric),
+  ('00000000-0000-0000-0000-000000000104'::uuid, '노트북/충전기', 0::numeric),
+  ('00000000-0000-0000-0000-000000000104'::uuid, '출장 서류', 1::numeric),
+  ('00000000-0000-0000-0000-000000000105'::uuid, '복용 약', 0::numeric),
+  ('00000000-0000-0000-0000-000000000105'::uuid, '신분증', 1::numeric)
+) as seed(template_id, item_name, item_order)
+where not exists (
+  select 1 from public.checklist_template_items existing
+  where existing.template_id = seed.template_id
+    and existing.name = seed.item_name
+);
+
 create index if not exists items_space_deleted_idx on public.items(space_id, deleted_at);
 create index if not exists items_name_idx on public.items(name);
 create index if not exists locations_space_name_idx on public.locations(space_id, name);
@@ -803,5 +988,11 @@ create policy item_photo_storage_insert on storage.objects for insert with check
 );
 drop policy if exists item_photo_storage_delete on storage.objects;
 create policy item_photo_storage_delete on storage.objects for delete using (
-  bucket_id = 'item-photos' and (storage.foldername(name))[1] = auth.uid()::text
+  bucket_id = 'item-photos' and exists (
+    select 1 from public.item_photos p
+    join public.items i on i.id = p.item_id
+    where p.storage_path = name
+      and public.is_space_member(i.space_id, auth.uid())
+      and (i.visibility = 'shared' or i.created_by = auth.uid() or i.owner_user_id = auth.uid())
+  )
 );

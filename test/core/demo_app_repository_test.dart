@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:where_is_that/core/data/demo_app_repository.dart';
@@ -90,5 +92,50 @@ void main() {
         );
       },
     );
+
+    test(
+      'item photos are capped at three and categories are space scoped',
+      () async {
+        final repository = DemoAppRepository();
+        final item = (await repository.listItems('demo-space')).first;
+        var updated = item;
+        for (var index = 0; index < 3; index++) {
+          final photo = await repository.uploadItemPhoto(
+            item: updated,
+            bytes: Uint8List.fromList([index]),
+            extension: 'jpg',
+          );
+          updated = updated.copyWith(photos: [...updated.photos, photo]);
+        }
+        expect(
+          repository.uploadItemPhoto(
+            item: updated,
+            bytes: Uint8List.fromList([4]),
+            extension: 'jpg',
+          ),
+          throwsA(isA<AppException>()),
+        );
+
+        final category = await repository.createCategory(
+          spaceId: 'demo-space',
+          name: '테스트 카테고리',
+        );
+        expect(
+          (await repository.listCategories('demo-space'))
+              .any((entry) => entry.id == category.id),
+          isTrue,
+        );
+      },
+    );
+
+    test('system checklist templates are available', () async {
+      final repository = DemoAppRepository();
+      final templates = await repository.listChecklistTemplates();
+      expect(templates, hasLength(5));
+      final items = await repository.listChecklistTemplateItems(
+        templates.first.id,
+      );
+      expect(items, isNotEmpty);
+    });
   });
 }

@@ -20,7 +20,11 @@ class _ChecklistPageState extends ConsumerState<ChecklistPage> {
   Future<void> _createChecklist() async {
     final controller = TextEditingController();
     var visibility = 'shared';
-    final result = await showDialog<(String, String)?>(
+    String? templateId;
+    final templates =
+        ref.read(checklistTemplatesProvider).value ??
+        const <ChecklistTemplate>[];
+    final result = await showDialog<(String, String, String?)?>(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
@@ -33,6 +37,34 @@ class _ChecklistPageState extends ConsumerState<ChecklistPage> {
                 autofocus: true,
                 decoration: const InputDecoration(labelText: '이름'),
               ),
+              if (templates.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String?>(
+                  initialValue: templateId,
+                  decoration: const InputDecoration(labelText: '기본 템플릿 (선택)'),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('직접 만들기'),
+                    ),
+                    for (final template in templates)
+                      DropdownMenuItem<String?>(
+                        value: template.id,
+                        child: Text(template.name),
+                      ),
+                  ],
+                  onChanged: (value) {
+                    setDialogState(() {
+                      templateId = value;
+                      if (value != null && controller.text.trim().isEmpty) {
+                        controller.text = templates
+                            .firstWhere((template) => template.id == value)
+                            .name;
+                      }
+                    });
+                  },
+                ),
+              ],
               const SizedBox(height: 12),
               SegmentedButton<String>(
                 segments: [
@@ -57,8 +89,11 @@ class _ChecklistPageState extends ConsumerState<ChecklistPage> {
               child: Text(context.l10n.cancel),
             ),
             FilledButton(
-              onPressed: () =>
-                  Navigator.pop(context, (controller.text.trim(), visibility)),
+              onPressed: () => Navigator.pop(context, (
+                controller.text.trim(),
+                visibility,
+                templateId,
+              )),
               child: Text(context.l10n.add),
             ),
           ],
@@ -70,10 +105,28 @@ class _ChecklistPageState extends ConsumerState<ChecklistPage> {
     final checklist = await ref
         .read(workspaceActionsProvider)
         .createChecklist(
-          spaceId: widget.spaceId,
+          spaceId: result.$2 == 'shared' ? widget.spaceId : null,
           name: result.$1,
           visibility: result.$2,
         );
+    if (result.$3 != null) {
+      final templateItems = await ref.read(
+        checklistTemplateItemsProvider(result.$3!).future,
+      );
+      for (final templateItem in templateItems) {
+        await ref
+            .read(workspaceActionsProvider)
+            .saveChecklistItem(
+              ChecklistItem(
+                id: '',
+                checklistId: checklist.id,
+                name: templateItem.name,
+                sortOrder: templateItem.sortOrder,
+              ),
+              isNew: true,
+            );
+      }
+    }
     setState(() => _selectedId = checklist.id);
   }
 

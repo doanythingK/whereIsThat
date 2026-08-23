@@ -1,5 +1,8 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../../app/localization/app_localizations.dart';
 import '../../../core/data/repository_providers.dart';
@@ -10,12 +13,14 @@ class ItemEditorSheet extends ConsumerStatefulWidget {
     required this.spaceId,
     this.item,
     this.initialName,
+    this.initialLocationId,
     super.key,
   });
 
   final String spaceId;
   final Item? item;
   final String? initialName;
+  final String? initialLocationId;
 
   @override
   ConsumerState<ItemEditorSheet> createState() => _ItemEditorSheetState();
@@ -31,6 +36,8 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
   String _visibility = 'shared';
   String? _categoryId;
   bool _saving = false;
+  final ImagePicker _imagePicker = ImagePicker();
+  final List<Uint8List> _pendingPhotos = [];
 
   @override
   void initState() {
@@ -45,7 +52,7 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
     _unitController = TextEditingController(text: item?.unit ?? '');
     _detailController = TextEditingController(text: item?.detailLocation ?? '');
     _memoController = TextEditingController(text: item?.memo ?? '');
-    _locationId = item?.locationId;
+    _locationId = item?.locationId ?? widget.initialLocationId;
     _visibility = item?.visibility ?? 'shared';
     _categoryId = item?.categoryId;
   }
@@ -99,11 +106,20 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
                   ? null
                   : _memoController.text.trim(),
               visibility: _visibility,
+              ownerUserId: _visibility == 'private'
+                  ? ref.read(appRepositoryProvider).signedInUser?.id
+                  : null,
             );
     try {
-      await ref
+      var saved = await ref
           .read(workspaceActionsProvider)
           .saveItem(item, isNew: old == null);
+      for (final bytes in _pendingPhotos) {
+        final photo = await ref
+            .read(workspaceActionsProvider)
+            .uploadItemPhoto(item: saved, bytes: bytes, extension: 'jpg');
+        saved = saved.copyWith(photos: [...saved.photos, photo]);
+      }
       if (mounted) Navigator.of(context).pop();
     } catch (error) {
       if (mounted) {
@@ -112,6 +128,65 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
       }
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _pickPhoto(ImageSource source) async {
+    final existingCount =
+        (widget.item?.photos.length ?? 0) + _pendingPhotos.length;
+    if (existingCount >= 3) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('물건 사진은 최대 3장까지 추가할 수 있습니다.')),
+      );
+      return;
+    }
+    final image = await _imagePicker.pickImage(
+      source: source,
+      maxWidth: 1600,
+      maxHeight: 1600,
+      imageQuality: 85,
+    );
+    if (image == null) return;
+    final bytes = await image.readAsBytes();
+    if (!mounted) return;
+    setState(() => _pendingPhotos.add(bytes));
+  }
+
+  Future<void> _createCategory(List<Category> categories) async {
+    final controller = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('카테고리 추가'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: '카테고리 이름'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(context.l10n.cancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: Text(context.l10n.add),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (name == null || name.isEmpty) return;
+    try {
+      final category = await ref
+          .read(workspaceActionsProvider)
+          .createCategory(spaceId: widget.spaceId, name: name);
+      if (mounted) setState(() => _categoryId = category.id);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.toString())));
+      }
     }
   }
 
@@ -217,6 +292,14 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
                 ].cast<DropdownMenuItem<String>>(),
                 onChanged: (value) => setState(() => _categoryId = value),
               ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: () => _createCategory(categories),
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('카테고리 추가'),
+                ),
+              ),
               const SizedBox(height: 12),
               SegmentedButton<String>(
                 segments: [
@@ -237,6 +320,22 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
               TextField(
                 controller: _detailController,
                 decoration: InputDecoration(labelText: '상세 위치 (선택)'),
+              ),
+              const SizedBox(height: 12),
+              _PhotoSection(
+                item: widget.item,
+                pendingPhotos: _pendingPhotos,
+                onPickCamera: () => _pickPhoto(ImageSource.camera),
+                onPickGallery: () => _pickPhoto(ImageSource.gallery),
+                onRemovePending: (index) =>
+                    setState(() => _pendingPhotos.removeAt(index)),
+                onDeleteExisting: (photo) async {
+                  if (widget.item == null) return;
+                  await ref
+                      .read(workspaceActionsProvider)
+                      .deleteItemPhoto(widget.item!, photo);
+                  if (mounted) setState(() {});
+                },
               ),
               const SizedBox(height: 12),
               TextField(
@@ -263,6 +362,157 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
       ),
     );
   }
+}
+
+class _PhotoSection extends StatelessWidget {
+  const _PhotoSection({
+    required this.item,
+    required this.pendingPhotos,
+    required this.onPickCamera,
+    required this.onPickGallery,
+    required this.onRemovePending,
+    required this.onDeleteExisting,
+  });
+
+  final Item? item;
+  final List<Uint8List> pendingPhotos;
+  final VoidCallback onPickCamera;
+  final VoidCallback onPickGallery;
+  final ValueChanged<int> onRemovePending;
+  final ValueChanged<ItemPhoto> onDeleteExisting;
+
+  @override
+  Widget build(BuildContext context) {
+    final photos = item?.photos ?? const <ItemPhoto>[];
+    final total = photos.length + pendingPhotos.length;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                '사진 ($total/3)',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            IconButton(
+              onPressed: total >= 3 ? null : onPickCamera,
+              tooltip: '카메라',
+              icon: const Icon(Icons.camera_alt_outlined),
+            ),
+            IconButton(
+              onPressed: total >= 3 ? null : onPickGallery,
+              tooltip: '갤러리',
+              icon: const Icon(Icons.photo_library_outlined),
+            ),
+          ],
+        ),
+        if (total == 0)
+          Text(
+            '필요할 때 사진을 최대 3장까지 추가할 수 있어요.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        if (total > 0)
+          SizedBox(
+            height: 92,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: [
+                for (final photo in photos)
+                  _ExistingPhotoTile(
+                    photo: photo,
+                    onDelete: () => onDeleteExisting(photo),
+                  ),
+                for (var index = 0; index < pendingPhotos.length; index++)
+                  Stack(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Image.memory(
+                            pendingPhotos[index],
+                            width: 92,
+                            height: 92,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        right: 8,
+                        top: 0,
+                        child: IconButton.filledTonal(
+                          onPressed: () => onRemovePending(index),
+                          icon: const Icon(Icons.close, size: 16),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _ExistingPhotoTile extends ConsumerWidget {
+  const _ExistingPhotoTile({required this.photo, required this.onDelete});
+
+  final ItemPhoto photo;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return FutureBuilder<String>(
+      future: ref
+          .read(workspaceActionsProvider)
+          .createItemPhotoSignedUrl(photo),
+      builder: (context, snapshot) => Stack(
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: snapshot.hasData && snapshot.data!.isNotEmpty
+                  ? Image.network(
+                      snapshot.data!,
+                      width: 92,
+                      height: 92,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, error, stack) =>
+                          const _PhotoPlaceholder(),
+                    )
+                  : const _PhotoPlaceholder(),
+            ),
+          ),
+          Positioned(
+            right: 8,
+            top: 0,
+            child: IconButton.filledTonal(
+              onPressed: onDelete,
+              icon: const Icon(Icons.delete_outline, size: 16),
+              visualDensity: VisualDensity.compact,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PhotoPlaceholder extends StatelessWidget {
+  const _PhotoPlaceholder();
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 92,
+    height: 92,
+    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+    child: const Icon(Icons.image_outlined),
+  );
 }
 
 extension<T> on Iterable<T> {

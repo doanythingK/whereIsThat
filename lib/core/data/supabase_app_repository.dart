@@ -40,6 +40,11 @@ class SupabaseAppRepository implements AppRepository {
   }
 
   @override
+  Stream<AppUser?> watchAuthState() => _client.auth.onAuthStateChange.map(
+    (data) => data.session == null ? null : _userFromAuth(data.session!.user),
+  );
+
+  @override
   Future<void> signIn(SocialProvider provider) async {
     final oauthProvider = switch (provider) {
       SocialProvider.google => OAuthProvider.google,
@@ -56,11 +61,61 @@ class SupabaseAppRepository implements AppRepository {
   }
 
   @override
+  Future<void> linkIdentity(SocialProvider provider) async {
+    final oauthProvider = switch (provider) {
+      SocialProvider.google => OAuthProvider.google,
+      SocialProvider.apple => OAuthProvider.apple,
+      SocialProvider.kakao => OAuthProvider.kakao,
+      SocialProvider.naver => const OAuthProvider('custom:naver'),
+    };
+    await _client.auth.linkIdentity(
+      oauthProvider,
+      redirectTo: 'whereisthat://auth-callback',
+    );
+  }
+
+  @override
   Future<void> signOut() => _client.auth.signOut();
 
   @override
   Future<void> deleteAccount() async {
     await _client.rpc('request_account_deletion');
+  }
+
+  @override
+  Future<void> registerDevice({
+    required String platform,
+    required String token,
+    String? appVersion,
+  }) async {
+    await _client.from('user_devices').upsert({
+      'user_id': _requireUserId(),
+      'platform': platform,
+      'fcm_token': token,
+      'app_version': appVersion,
+      'is_active': true,
+      'last_seen_at': _now().toIso8601String(),
+      'updated_at': _now().toIso8601String(),
+    }, onConflict: 'fcm_token');
+  }
+
+  @override
+  Future<List<AppNotice>> listNotices() async {
+    final rows = await _client
+        .from('app_notices')
+        .select('id,title,body,importance')
+        .eq('is_active', true)
+        .order('created_at', ascending: false);
+    return (rows as List)
+        .map(
+          (raw) => AppNotice(
+            id: raw['id'] as String,
+            title: raw['title'] as String,
+            body: raw['body'] as String,
+            importance: raw['importance'] as String? ?? 'normal',
+          ),
+        )
+        .toList();
   }
 
   @override
@@ -79,6 +134,42 @@ class SupabaseAppRepository implements AppRepository {
         .select()
         .isFilter('deleted_at', null)
         .order('updated_at', ascending: false);
+    final spaces = <Space>[];
+    final lastAccessed = <String, DateTime>{};
+    for (final raw in (rows as List)) {
+      final row = Map<String, dynamic>.from(raw as Map);
+      final members = await _client
+          .from('space_members')
+          .select('last_accessed_at')
+          .eq('space_id', row['id'] as String)
+          .isFilter('deleted_at', null);
+      final memberRows = members as List;
+      for (final rawMember in memberRows) {
+        final accessed = (rawMember as Map)['last_accessed_at'];
+        if (accessed != null) {
+          lastAccessed[row['id'] as String] = DateTime.parse(
+            accessed.toString(),
+          );
+          break;
+        }
+      }
+      spaces.add(Space.fromJson({...row, 'memberCount': memberRows.length}));
+    }
+    spaces.sort((a, b) {
+      final aDate = lastAccessed[a.id] ?? a.updatedAt;
+      final bDate = lastAccessed[b.id] ?? b.updatedAt;
+      return bDate.compareTo(aDate);
+    });
+    return spaces;
+  }
+
+  @override
+  Future<List<Space>> listDeletedSpaces() async {
+    final rows = await _client
+        .from('spaces')
+        .select()
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', ascending: false);
     return (rows as List).map((row) => Space.fromJson(row)).toList();
   }
 
@@ -86,11 +177,17 @@ class SupabaseAppRepository implements AppRepository {
   Future<Space> createSpace({
     required String name,
     required String iconKey,
+    String? iconColor,
   }) async {
     final userId = _requireUserId();
     final row = await _client
         .from('spaces')
-        .insert({'name': name, 'icon_key': iconKey, 'created_by': userId})
+        .insert({
+          'name': name,
+          'icon_key': iconKey,
+          'icon_color': iconColor,
+          'created_by': userId,
+        })
         .select()
         .single();
     return Space.fromJson(row);
@@ -124,12 +221,8 @@ class SupabaseAppRepository implements AppRepository {
   }
 
   @override
-  Future<void> restoreSpace(Space space) async {
-    await _client
-        .from('spaces')
-        .update({'deleted_at': null, 'delete_purge_at': null})
-        .eq('id', space.id);
-  }
+  Future<void> restoreSpace(Space space) async =>
+      _client.rpc('restore_space', params: {'target_space_id': space.id});
 
   @override
   Future<List<SpaceMember>> listMembers(String spaceId) async {
@@ -148,6 +241,18 @@ class SupabaseAppRepository implements AppRepository {
         .from('space_members')
         .update({'role': role})
         .eq('id', member.id);
+  }
+
+  @override
+  Future<void> updateMemberDisplayName(
+    SpaceMember member,
+    String displayName,
+  ) async {
+    await _client
+        .from('space_members')
+        .update({'display_name': displayName.trim()})
+        .eq('id', member.id)
+        .eq('user_id', _requireUserId());
   }
 
   @override
@@ -198,6 +303,17 @@ class SupabaseAppRepository implements AppRepository {
         .eq('space_id', spaceId)
         .isFilter('deleted_at', null)
         .order('created_at');
+    return (rows as List).map((row) => FloorPlan.fromJson(row)).toList();
+  }
+
+  @override
+  Future<List<FloorPlan>> listDeletedFloorPlans(String spaceId) async {
+    final rows = await _client
+        .from('floor_plans')
+        .select()
+        .eq('space_id', spaceId)
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', ascending: false);
     return (rows as List).map((row) => FloorPlan.fromJson(row)).toList();
   }
 
@@ -256,10 +372,6 @@ class SupabaseAppRepository implements AppRepository {
 
   @override
   Future<void> restoreFloorPlan(FloorPlan floorPlan) async {
-    await _client
-        .from('floor_plans')
-        .update({'deleted_at': null, 'delete_purge_at': null})
-        .eq('id', floorPlan.id);
     await _client.rpc(
       'restore_floor_plan',
       params: {'target_floor_plan_id': floorPlan.id},
@@ -273,6 +385,17 @@ class SupabaseAppRepository implements AppRepository {
         .select()
         .eq('floor_plan_id', floorPlanId)
         .isFilter('deleted_at', null);
+    return (rows as List).map((row) => Location.fromJson(row)).toList();
+  }
+
+  @override
+  Future<List<Location>> listDeletedLocations(String spaceId) async {
+    final rows = await _client
+        .from('locations')
+        .select()
+        .eq('space_id', spaceId)
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', ascending: false);
     return (rows as List).map((row) => Location.fromJson(row)).toList();
   }
 
@@ -303,6 +426,7 @@ class SupabaseAppRepository implements AppRepository {
           .single();
       return Location.fromJson(row);
     }
+    payload['version'] = location.version + 1;
     final row = await _client
         .from('locations')
         .update(payload..remove('created_by'))
@@ -339,6 +463,32 @@ class SupabaseAppRepository implements AppRepository {
         .isFilter('deleted_at', null)
         .order('name');
     return (rows as List).map((row) => Category.fromJson(row)).toList();
+  }
+
+  @override
+  Future<Category> createCategory({
+    required String spaceId,
+    required String name,
+  }) async {
+    final row = await _client
+        .from('categories')
+        .insert({
+          'space_id': spaceId,
+          'name': name.trim(),
+          'created_by': _requireUserId(),
+        })
+        .select()
+        .single();
+    return Category.fromJson(row);
+  }
+
+  @override
+  Future<void> deleteCategory(Category category) async {
+    await _client
+        .from('categories')
+        .update({'deleted_at': _now().toIso8601String()})
+        .eq('id', category.id)
+        .eq('is_system', false);
   }
 
   @override
@@ -402,6 +552,27 @@ class SupabaseAppRepository implements AppRepository {
     return result;
   }
 
+  @override
+  Future<List<Item>> listDeletedItems(String spaceId) async {
+    final rows = await _client
+        .from('items')
+        .select()
+        .eq('space_id', spaceId)
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', ascending: false);
+    final result = <Item>[];
+    for (final raw in (rows as List)) {
+      final row = Map<String, dynamic>.from(raw as Map);
+      final photos = await _client
+          .from('item_photos')
+          .select()
+          .eq('item_id', row['id'] as String)
+          .order('sort_order');
+      result.add(Item.fromJson({...row, 'photos': photos}));
+    }
+    return result;
+  }
+
   Map<String, dynamic> _itemPayload(Item item) => {
     'space_id': item.spaceId,
     'location_id': item.locationId,
@@ -427,9 +598,10 @@ class SupabaseAppRepository implements AppRepository {
           .single();
       return Item.fromJson({...row, 'photos': <Map<String, dynamic>>[]});
     }
+    final payload = _itemPayload(item)..['version'] = item.version + 1;
     final row = await _client
         .from('items')
-        .update(_itemPayload(item)..remove('created_by'))
+        .update(payload..remove('created_by'))
         .eq('id', item.id)
         .eq('version', item.version)
         .isFilter('deleted_at', null)
@@ -453,10 +625,8 @@ class SupabaseAppRepository implements AppRepository {
   }
 
   @override
-  Future<void> restoreItem(Item item) async => _client
-      .from('items')
-      .update({'deleted_at': null, 'delete_purge_at': null})
-      .eq('id', item.id);
+  Future<void> restoreItem(Item item) async =>
+      _client.rpc('restore_item', params: {'target_item_id': item.id});
 
   @override
   Future<void> toggleFavorite(Item item) async {
@@ -626,12 +796,59 @@ class SupabaseAppRepository implements AppRepository {
 
   @override
   Future<List<Checklist>> listChecklists({String? spaceId}) async {
-    var query = _client.from('checklists').select();
-    if (spaceId != null) query = query.eq('space_id', spaceId);
-    final rows = await query
+    final rows = await _client
+        .from('checklists')
+        .select()
         .isFilter('deleted_at', null)
         .order('created_at', ascending: false);
-    return (rows as List).map((row) => Checklist.fromJson(row)).toList();
+    final userId = _requireUserId();
+    return (rows as List)
+        .where((raw) {
+          final row = raw as Map;
+          if (spaceId == null) return true;
+          return row['space_id'] == spaceId ||
+              (row['space_id'] == null && row['created_by'] == userId);
+        })
+        .map((row) => Checklist.fromJson(row))
+        .toList();
+  }
+
+  @override
+  Future<List<ChecklistTemplate>> listChecklistTemplates() async {
+    final rows = await _client
+        .from('checklist_templates')
+        .select('id,name,template_type')
+        .order('name');
+    return (rows as List)
+        .map(
+          (raw) => ChecklistTemplate(
+            id: raw['id'] as String,
+            name: raw['name'] as String,
+            templateType: raw['template_type'] as String? ?? 'system',
+          ),
+        )
+        .toList();
+  }
+
+  @override
+  Future<List<ChecklistTemplateItem>> listChecklistTemplateItems(
+    String templateId,
+  ) async {
+    final rows = await _client
+        .from('checklist_template_items')
+        .select()
+        .eq('template_id', templateId)
+        .order('sort_order');
+    return (rows as List)
+        .map(
+          (raw) => ChecklistTemplateItem(
+            id: raw['id'] as String,
+            templateId: raw['template_id'] as String,
+            name: raw['name'] as String,
+            sortOrder: (raw['sort_order'] as num?)?.toDouble() ?? 0,
+          ),
+        )
+        .toList();
   }
 
   @override
@@ -653,7 +870,7 @@ class SupabaseAppRepository implements AppRepository {
     final row = await _client
         .from('checklists')
         .insert({
-          'space_id': spaceId,
+          'space_id': visibility == 'shared' ? spaceId : null,
           'created_by': _requireUserId(),
           'name': name,
           'visibility': visibility,
@@ -749,6 +966,7 @@ class SupabaseAppRepository implements AppRepository {
         .from('shopping_items')
         .stream(primaryKey: ['id'])
         .eq('space_id', spaceId)
+        .isFilter('deleted_at', null)
         .order('sort_order')
         .map((rows) => rows.map(ShoppingItem.fromJson).toList());
   }

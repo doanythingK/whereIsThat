@@ -25,10 +25,12 @@ class DemoAppRepository implements AppRepository {
   final Map<String, ShoppingItem> _shoppingItems = {};
   final Map<String, Checklist> _checklists = {};
   final Map<String, ChecklistItem> _checklistItems = {};
+  final Map<String, ChecklistTemplate> _templates = {};
+  final Map<String, List<ChecklistTemplateItem>> _templateItems = {};
   final Map<String, ChecklistMemberCheck> _memberChecks = {};
   final List<ItemLocationHistory> _history = [];
   final Map<String, DateTime> _lastAccessed = {};
-  final Map<String, String?> _locationRecovery = {};
+  final Map<String, List<String>> _locationRecovery = {};
 
   final AppUser _user = const AppUser(
     id: 'demo-user',
@@ -166,19 +168,61 @@ class DemoAppRepository implements AppRepository {
       name: '랜턴',
       sortOrder: 0,
     );
+    const templateNames = <String>['해외여행', '국내여행', '캠핑', '출장', '입원'];
+    for (var index = 0; index < templateNames.length; index++) {
+      final id = 'demo-template-$index';
+      _templates[id] = ChecklistTemplate(id: id, name: templateNames[index]);
+      _templateItems[id] = [
+        ChecklistTemplateItem(
+          id: '$id-item-0',
+          templateId: id,
+          name: index == 2 ? '랜턴' : '신분증',
+        ),
+        ChecklistTemplateItem(
+          id: '$id-item-1',
+          templateId: id,
+          name: index == 2 ? '충전기' : '충전기',
+          sortOrder: 1,
+        ),
+      ];
+    }
   }
 
   @override
   Future<AppUser?> currentUser() async => _user;
 
   @override
+  Stream<AppUser?> watchAuthState() async* {
+    yield _user;
+  }
+
+  @override
   Future<void> signIn(SocialProvider provider) async {}
+
+  @override
+  Future<void> linkIdentity(SocialProvider provider) async {}
 
   @override
   Future<void> signOut() async {}
 
   @override
   Future<void> deleteAccount() async {}
+
+  @override
+  Future<void> registerDevice({
+    required String platform,
+    required String token,
+    String? appVersion,
+  }) async {}
+
+  @override
+  Future<List<AppNotice>> listNotices() async => const [
+    AppNotice(
+      id: 'demo-notice',
+      title: '데모 모드 안내',
+      body: 'Supabase 환경 변수를 설정하면 실제 계정과 공간 데이터를 사용할 수 있습니다.',
+    ),
+  ];
 
   @override
   Future<String> acceptInvite(String code) async {
@@ -202,9 +246,14 @@ class DemoAppRepository implements AppRepository {
   }
 
   @override
+  Future<List<Space>> listDeletedSpaces() async =>
+      _spaces.values.where((space) => space.deletedAt != null).toList();
+
+  @override
   Future<Space> createSpace({
     required String name,
     required String iconKey,
+    String? iconColor,
   }) async {
     final now = _now();
     final spaceId = _uuid.v4();
@@ -212,6 +261,7 @@ class DemoAppRepository implements AppRepository {
       id: spaceId,
       name: name,
       iconKey: iconKey,
+      iconColor: iconColor,
       createdBy: _user.id,
       createdAt: now,
       updatedAt: now,
@@ -267,6 +317,16 @@ class DemoAppRepository implements AppRepository {
   }
 
   @override
+  Future<void> updateMemberDisplayName(
+    SpaceMember member,
+    String displayName,
+  ) async {
+    if (member.userId == _user.id) {
+      _members[member.id] = member.copyWith(displayName: displayName.trim());
+    }
+  }
+
+  @override
   Future<SpaceInvite> createInvite(String spaceId, Duration validity) async {
     final invite = SpaceInvite(
       id: _uuid.v4(),
@@ -298,7 +358,16 @@ class DemoAppRepository implements AppRepository {
         )) {
       throw const AppException('마지막 관리자는 다른 멤버를 관리자로 지정한 뒤 탈퇴해야 합니다.');
     }
-    _members[member.id] = member.copyWith(lastAccessedAt: null);
+    _members.remove(member.id);
+    final space = _spaces[spaceId];
+    if (space != null) {
+      _spaces[spaceId] = space.copyWith(
+        memberCount: _members.values
+            .where((entry) => entry.spaceId == spaceId)
+            .length,
+        updatedAt: _now(),
+      );
+    }
   }
 
   @override
@@ -311,6 +380,12 @@ class DemoAppRepository implements AppRepository {
       .values
       .where((plan) => plan.spaceId == spaceId && plan.deletedAt == null)
       .toList();
+
+  @override
+  Future<List<FloorPlan>> listDeletedFloorPlans(String spaceId) async =>
+      _floorPlans.values
+          .where((plan) => plan.spaceId == spaceId && plan.deletedAt != null)
+          .toList();
 
   @override
   Future<FloorPlan> createFloorPlan({
@@ -366,11 +441,9 @@ class DemoAppRepository implements AppRepository {
       (item) => item.floorPlanId == floorPlan.id,
     )) {
       _locationRecovery[location.id] = _items.values
-          .firstWhere(
-            (item) => item.locationId == location.id,
-            orElse: () => _items.values.first,
-          )
-          .id;
+          .where((item) => item.locationId == location.id)
+          .map((item) => item.id)
+          .toList();
       _locations[location.id] = location.copyWith(
         deletedAt: now,
         deletePurgeAt: now.add(const Duration(days: 30)),
@@ -396,10 +469,11 @@ class DemoAppRepository implements AppRepository {
         deletedAt: null,
         deletePurgeAt: null,
       );
-      final itemId = _locationRecovery[location.id];
-      final item = itemId == null ? null : _items[itemId];
-      if (item != null && item.locationId == null) {
-        _items[item.id] = item.copyWith(locationId: location.id);
+      for (final itemId in _locationRecovery[location.id] ?? const <String>[]) {
+        final item = _items[itemId];
+        if (item != null && item.locationId == null) {
+          _items[item.id] = item.copyWith(locationId: location.id);
+        }
       }
     }
   }
@@ -414,6 +488,15 @@ class DemoAppRepository implements AppRepository {
       .toList();
 
   @override
+  Future<List<Location>> listDeletedLocations(String spaceId) async =>
+      _locations.values
+          .where(
+            (location) =>
+                location.spaceId == spaceId && location.deletedAt != null,
+          )
+          .toList();
+
+  @override
   Future<Location> saveLocation(
     Location location, {
     required bool isNew,
@@ -425,9 +508,17 @@ class DemoAppRepository implements AppRepository {
             createdAt: now,
             updatedAt: now,
           )
-        : location.copyWith(version: location.version + 1, updatedAt: now);
+        : _saveExistingLocation(location, now);
     _locations[saved.id] = saved;
     return saved;
+  }
+
+  Location _saveExistingLocation(Location location, DateTime now) {
+    final current = _locations[location.id];
+    if (current == null || current.version != location.version) {
+      throw const ConflictException();
+    }
+    return location.copyWith(version: location.version + 1, updatedAt: now);
   }
 
   @override
@@ -440,7 +531,11 @@ class DemoAppRepository implements AppRepository {
     for (final item in _items.values.where(
       (item) => item.locationId == location.id,
     )) {
-      _locationRecovery[location.id] = item.id;
+      final recovery = _locationRecovery.putIfAbsent(
+        location.id,
+        () => <String>[],
+      );
+      if (!recovery.contains(item.id)) recovery.add(item.id);
       _items[item.id] = item.copyWith(locationId: null, updatedAt: now);
     }
   }
@@ -451,10 +546,11 @@ class DemoAppRepository implements AppRepository {
       deletedAt: null,
       deletePurgeAt: null,
     );
-    final itemId = _locationRecovery[location.id];
-    final item = itemId == null ? null : _items[itemId];
-    if (item != null && item.locationId == null) {
-      _items[item.id] = item.copyWith(locationId: location.id);
+    for (final itemId in _locationRecovery[location.id] ?? const <String>[]) {
+      final item = _items[itemId];
+      if (item != null && item.locationId == null) {
+        _items[item.id] = item.copyWith(locationId: location.id);
+      }
     }
   }
 
@@ -465,6 +561,25 @@ class DemoAppRepository implements AppRepository {
         (category) => category.spaceId == null || category.spaceId == spaceId,
       )
       .toList();
+
+  @override
+  Future<Category> createCategory({
+    required String spaceId,
+    required String name,
+  }) async {
+    final category = Category(
+      id: _uuid.v4(),
+      spaceId: spaceId,
+      name: name.trim(),
+    );
+    _categories[category.id] = category;
+    return category;
+  }
+
+  @override
+  Future<void> deleteCategory(Category category) async {
+    if (!category.isSystem) _categories.remove(category.id);
+  }
 
   @override
   Future<List<Item>> listItems(String spaceId, {String? search}) async {
@@ -489,6 +604,11 @@ class DemoAppRepository implements AppRepository {
     result.sort((a, b) => a.name.compareTo(b.name));
     return result;
   }
+
+  @override
+  Future<List<Item>> listDeletedItems(String spaceId) async => _items.values
+      .where((item) => item.spaceId == spaceId && item.deletedAt != null)
+      .toList();
 
   @override
   Future<Item> saveItem(Item item, {required bool isNew}) async {
@@ -526,8 +646,11 @@ class DemoAppRepository implements AppRepository {
   );
 
   @override
-  Future<void> toggleFavorite(Item item) async =>
-      _items[item.id] = item.copyWith(isFavorite: !item.isFavorite);
+  Future<void> toggleFavorite(Item item) async {
+    final current = _items[item.id];
+    if (current == null) return;
+    _items[item.id] = current.copyWith(isFavorite: !current.isFavorite);
+  }
 
   @override
   Future<Item> moveItem(
@@ -636,6 +759,16 @@ class DemoAppRepository implements AppRepository {
       .values
       .where((item) => spaceId == null || item.spaceId == spaceId)
       .toList();
+
+  @override
+  Future<List<ChecklistTemplate>> listChecklistTemplates() async =>
+      _templates.values.toList()..sort((a, b) => a.name.compareTo(b.name));
+
+  @override
+  Future<List<ChecklistTemplateItem>> listChecklistTemplateItems(
+    String templateId,
+  ) async =>
+      List<ChecklistTemplateItem>.from(_templateItems[templateId] ?? const []);
 
   @override
   Future<List<ChecklistItem>> listChecklistItems(String checklistId) async =>

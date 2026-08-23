@@ -5,44 +5,103 @@ import 'package:go_router/go_router.dart';
 import '../../../app/localization/app_localizations.dart';
 import '../../../core/data/repository_providers.dart';
 import '../../../core/models/app_models.dart';
+import '../../auth/application/auth_actions.dart';
 
 class SpacePickerPage extends ConsumerWidget {
   const SpacePickerPage({super.key});
 
   Future<void> _createSpace(BuildContext context, WidgetRef ref) async {
     final controller = TextEditingController();
-    final name = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(context.l10n.createSpace),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: InputDecoration(labelText: context.l10n.spaceName),
-          onSubmitted: (value) => Navigator.of(context).pop(value.trim()),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text(context.l10n.cancel),
+    var iconKey = 'home';
+    var iconColor = '#2563EB';
+    final result =
+        await showDialog<({String name, String iconKey, String iconColor})?>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text(context.l10n.createSpace),
+            content: StatefulBuilder(
+              builder: (context, setDialogState) => Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: controller,
+                    autofocus: true,
+                    decoration: InputDecoration(
+                      labelText: context.l10n.spaceName,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<String>(
+                    initialValue: iconKey,
+                    decoration: const InputDecoration(labelText: '대표 아이콘'),
+                    items: const [
+                      DropdownMenuItem(value: 'home', child: Text('집')),
+                      DropdownMenuItem(value: 'office', child: Text('회사')),
+                      DropdownMenuItem(value: 'storage', child: Text('창고')),
+                    ],
+                    onChanged: (value) =>
+                        setDialogState(() => iconKey = value ?? iconKey),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final color in <String>[
+                        '#2563EB',
+                        '#16A34A',
+                        '#EA580C',
+                        '#9333EA',
+                      ])
+                        ChoiceChip(
+                          label: CircleAvatar(
+                            backgroundColor: _hexColor(color),
+                            radius: 10,
+                          ),
+                          selected: iconColor == color,
+                          onSelected: (_) =>
+                              setDialogState(() => iconColor = color),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text(context.l10n.cancel),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop((
+                  name: controller.text.trim(),
+                  iconKey: iconKey,
+                  iconColor: iconColor,
+                )),
+                child: Text(context.l10n.save),
+              ),
+            ],
           ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text.trim()),
-            child: Text(context.l10n.save),
-          ),
-        ],
-      ),
-    );
+        );
     controller.dispose();
-    if (name == null || name.isEmpty || !context.mounted) return;
+    if (result == null || result.name.isEmpty || !context.mounted) return;
     try {
       final space = await ref
           .read(workspaceActionsProvider)
-          .createSpace(name: name, iconKey: 'home');
+          .createSpace(
+            name: result.name,
+            iconKey: result.iconKey,
+            iconColor: result.iconColor,
+          );
       if (context.mounted) context.go('/space/${space.id}/home');
     } catch (error) {
       if (context.mounted) _showError(context, error.toString());
     }
+  }
+
+  Color _hexColor(String value) {
+    final hex = value.replaceFirst('#', '');
+    final parsed = int.tryParse('FF$hex', radix: 16);
+    return parsed == null ? Colors.blue : Color(parsed);
   }
 
   void _showError(BuildContext context, String message) {
@@ -58,8 +117,16 @@ class SpacePickerPage extends ConsumerWidget {
         title: Text(context.l10n.chooseSpace),
         actions: [
           IconButton(
+            tooltip: context.l10n.restore,
+            onPressed: () => _showDeletedSpaces(context, ref),
+            icon: const Icon(Icons.delete_sweep_outlined),
+          ),
+          IconButton(
             tooltip: context.l10n.signOut,
-            onPressed: () => ref.read(appRepositoryProvider).signOut(),
+            onPressed: () async {
+              await ref.read(authActionsProvider).signOut();
+              if (context.mounted) context.go('/auth');
+            },
             icon: const Icon(Icons.logout),
           ),
         ],
@@ -87,6 +154,42 @@ class SpacePickerPage extends ConsumerWidget {
       ),
     );
   }
+
+  Future<void> _showDeletedSpaces(BuildContext context, WidgetRef ref) async {
+    final spaces = await ref.read(deletedSpacesProvider.future);
+    if (!context.mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: spaces.isEmpty
+            ? const Padding(
+                padding: EdgeInsets.all(24),
+                child: Text('복구할 공간이 없습니다.'),
+              )
+            : ListView(
+                shrinkWrap: true,
+                children: [
+                  for (final space in spaces)
+                    ListTile(
+                      title: Text(space.name),
+                      subtitle: Text(
+                        space.deletePurgeAt == null
+                            ? '30일 보관'
+                            : '영구 삭제 예정 ${space.deletePurgeAt!.toLocal()}',
+                      ),
+                      trailing: IconButton(
+                        tooltip: context.l10n.restore,
+                        icon: const Icon(Icons.restore),
+                        onPressed: () => ref
+                            .read(workspaceActionsProvider)
+                            .restoreSpace(space),
+                      ),
+                    ),
+                ],
+              ),
+      ),
+    );
+  }
 }
 
 class _SpaceCard extends ConsumerWidget {
@@ -109,11 +212,14 @@ class _SpaceCard extends ConsumerWidget {
             children: [
               CircleAvatar(
                 radius: 28,
-                child: Icon(
-                  space.iconKey == 'office'
-                      ? Icons.business
-                      : Icons.home_outlined,
-                ),
+                backgroundColor: space.iconColor == null
+                    ? null
+                    : _parseColor(space.iconColor!),
+                child: Icon(switch (space.iconKey) {
+                  'office' => Icons.business,
+                  'storage' => Icons.inventory_2_outlined,
+                  _ => Icons.home_outlined,
+                }),
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -137,6 +243,12 @@ class _SpaceCard extends ConsumerWidget {
       ),
     );
   }
+}
+
+Color _parseColor(String value) {
+  final hex = value.replaceFirst('#', '');
+  final parsed = int.tryParse('FF$hex', radix: 16);
+  return parsed == null ? Colors.blue : Color(parsed);
 }
 
 class _ErrorView extends StatelessWidget {

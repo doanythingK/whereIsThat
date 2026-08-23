@@ -1,17 +1,77 @@
-# where_is_that
+# 엄마 이거 어딨어?
 
-A new Flutter project.
+가족·룸메이트가 공간의 평면도와 보관 위치를 공유하고, 물건 검색·장보기·체크리스트를 함께 사용하는 Flutter MVP입니다.
 
-## Getting Started
+## 문서 읽는 순서
 
-This project is a starting point for a Flutter application.
+작업을 시작할 때는 아래 순서를 지킵니다.
 
-A few resources to get you started if this is your first Flutter project:
+1. `AGENTS.md`
+2. `PRODUCT_REQUIREMENTS.md`
+3. `MVP_SCOPE.md`
+4. `ARCHITECTURE.md`
+5. `DATABASE.md`
+6. `ROADMAP.md`
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+문서 간 정책 충돌은 임의로 해결하지 않고 먼저 보고합니다.
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## 기술 구조
+
+- Flutter / Riverpod / go_router
+- Feature-first 디렉터리
+- `UI → Provider/Action → Repository → Supabase`
+- Supabase Auth, PostgreSQL RLS, Storage Private Bucket, Realtime
+- 모델은 `freezed + json_serializable`을 사용합니다.
+- Supabase 키가 없는 로컬 실행은 `DemoAppRepository`를 사용해 UI와 핵심 흐름을 검토할 수 있습니다.
+
+## 로컬 실행
+
+```bash
+flutter pub get
+flutter analyze
+flutter test
+flutter run
+```
+
+실제 Supabase dev 프로젝트로 실행할 때는 publishable/anon key만 주입합니다.
+
+```bash
+flutter run \
+  --dart-define=APP_ENV=dev \
+  --dart-define=SUPABASE_URL=https://<dev-project>.supabase.co \
+  --dart-define=SUPABASE_ANON_KEY=<publishable-or-anon-key>
+```
+
+Service Role Key, DB 비밀번호, FCM 서버 키, 스토어 키는 앱이나 저장소에 넣지 않습니다.
+
+## Supabase
+
+`supabase/migrations/202608230001_mvp.sql`을 dev 프로젝트에 먼저 적용한 뒤 RLS와 OAuth provider 설정을 확인합니다. 운영 프로젝트에는 dev 검증 후 같은 migration을 승격합니다.
+
+30일 Soft Delete purge는 `supabase/functions/purge_deleted_data` Edge Function을 Supabase Cron에서 하루 한 번 호출하도록 설정합니다. Edge Function에만 `SUPABASE_SERVICE_ROLE_KEY`를 secret으로 등록합니다.
+
+필수 OAuth/플랫폼 설정:
+
+- Kakao, Google, Apple: Supabase Auth provider와 redirect URL `whereisthat://auth-callback`
+- Naver: Supabase custom OIDC provider `custom:naver`
+- Android/iOS 딥링크: `whereisthat` scheme
+- Firebase를 켜려면 각 환경의 `google-services.json`, `GoogleService-Info.plist`와 `FIREBASE_ENABLED=true`
+- AdMob 운영 App ID/Ad Unit ID는 테스트 ID를 교체한 뒤 `ADS_ENABLED=true`
+
+## 품질 명령
+
+```bash
+dart format --output=none --set-exit-if-changed lib test
+flutter analyze
+flutter test
+flutter build apk --debug
+```
+
+GitHub Actions가 `dev`와 `main`의 분석·테스트·Android debug build를 실행합니다. iOS archive/build는 macOS + Xcode + CocoaPods 환경에서 실행합니다.
+
+## 현재 검증 범위와 제약
+
+- 데모 저장소에서 공간/평면도/위치/물건/사진 선택/검색/장보기/체크리스트 주요 흐름을 실행할 수 있습니다.
+- Supabase 실서비스 동작은 migration 적용, OAuth provider, Firebase 설정을 각 환경에서 완료해야 합니다.
+- 현재 개발 머신은 Linux/WSL이므로 iOS 실제 빌드·서명·TestFlight 검증은 수행할 수 없습니다.
+- release signing, 실제 FCM 서버 발송, 운영 AdMob ID는 배포 환경에서 별도로 설정해야 합니다.
