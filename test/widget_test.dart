@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:where_is_that/app/app.dart';
 import 'package:where_is_that/core/data/demo_app_repository.dart';
 import 'package:where_is_that/core/data/repository_providers.dart';
+import 'package:where_is_that/features/space/presentation/home_page.dart';
 
 void main() {
   testWidgets('demo mode opens the space picker', (WidgetTester tester) async {
@@ -35,6 +36,6 @@ void main() {
     await tester.tap(find.text('우리집'));
     await tester.pumpAndSettle();
 
-    expect(find.text('물건 등록'), findsWidgets);
+    expect(find.byType(HomePage), findsOneWidget);
   });
 }
