@@ -33,11 +33,22 @@ class SpacePickerPage extends ConsumerWidget {
                   const SizedBox(height: 16),
                   DropdownButtonFormField<String>(
                     initialValue: iconKey,
-                    decoration: const InputDecoration(labelText: '대표 아이콘'),
-                    items: const [
-                      DropdownMenuItem(value: 'home', child: Text('집')),
-                      DropdownMenuItem(value: 'office', child: Text('회사')),
-                      DropdownMenuItem(value: 'storage', child: Text('창고')),
+                    decoration: InputDecoration(
+                      labelText: context.l10n.spaceIcon,
+                    ),
+                    items: [
+                      DropdownMenuItem(
+                        value: 'home',
+                        child: Text(context.l10n.homeSpace),
+                      ),
+                      DropdownMenuItem(
+                        value: 'office',
+                        child: Text(context.l10n.officeSpace),
+                      ),
+                      DropdownMenuItem(
+                        value: 'storage',
+                        child: Text(context.l10n.storageSpace),
+                      ),
                     ],
                     onChanged: (value) =>
                         setDialogState(() => iconKey = value ?? iconKey),
@@ -117,6 +128,11 @@ class SpacePickerPage extends ConsumerWidget {
         title: Text(context.l10n.chooseSpace),
         actions: [
           IconButton(
+            tooltip: context.l10n.invite,
+            onPressed: () => _enterInviteCode(context),
+            icon: const Icon(Icons.group_add_outlined),
+          ),
+          IconButton(
             tooltip: context.l10n.restore,
             onPressed: () => _showDeletedSpaces(context, ref),
             icon: const Icon(Icons.delete_sweep_outlined),
@@ -155,6 +171,35 @@ class SpacePickerPage extends ConsumerWidget {
     );
   }
 
+  Future<void> _enterInviteCode(BuildContext context) async {
+    final controller = TextEditingController();
+    final code = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(context.l10n.invite),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.characters,
+          decoration: InputDecoration(labelText: context.l10n.inviteCode),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(context.l10n.cancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: Text(context.l10n.continueLabel),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (code == null || code.isEmpty || !context.mounted) return;
+    context.go('/invite/${Uri.encodeComponent(code)}');
+  }
+
   Future<void> _showDeletedSpaces(BuildContext context, WidgetRef ref) async {
     final spaces = await ref.read(deletedSpacesProvider.future);
     if (!context.mounted) return;
@@ -162,9 +207,9 @@ class SpacePickerPage extends ConsumerWidget {
       context: context,
       builder: (context) => SafeArea(
         child: spaces.isEmpty
-            ? const Padding(
+            ? Padding(
                 padding: EdgeInsets.all(24),
-                child: Text('복구할 공간이 없습니다.'),
+                child: Text(context.l10n.noDeletedSpace),
               )
             : ListView(
                 shrinkWrap: true,
@@ -174,8 +219,10 @@ class SpacePickerPage extends ConsumerWidget {
                       title: Text(space.name),
                       subtitle: Text(
                         space.deletePurgeAt == null
-                            ? '30일 보관'
-                            : '영구 삭제 예정 ${space.deletePurgeAt!.toLocal()}',
+                            ? context.l10n.thirtyDayRetention
+                            : context.l10n.scheduledDeletion(
+                                space.deletePurgeAt!,
+                              ),
                       ),
                       trailing: IconButton(
                         tooltip: context.l10n.restore,

@@ -52,11 +52,14 @@ async function purgeRows(table: string) {
 }
 
 async function purgeAccounts() {
+  const accountCutoff = new Date(
+    Date.now() - 30 * 24 * 60 * 60 * 1000,
+  ).toISOString();
   const { data: profiles, error } = await admin
     .from('profiles')
     .select('id')
     .not('deleted_at', 'is', null)
-    .lte('deleted_at', cutoff);
+    .lte('deleted_at', accountCutoff);
   if (error) throw error;
   for (const profile of profiles ?? []) {
     const { error: deleteError } = await admin.auth.admin.deleteUser(profile.id);

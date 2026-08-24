@@ -55,7 +55,7 @@ class HomePage extends ConsumerWidget {
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
           children: [
             Text(
-              strings.greeting(user?.nickname ?? '이웃'),
+              strings.greeting(user?.nickname ?? strings.neighbor),
               style: Theme.of(context).textTheme.headlineSmall
                   ?.copyWith(fontWeight: FontWeight.w800),
             ),
@@ -130,65 +130,152 @@ class HomePage extends ConsumerWidget {
   }
 }
 
-class _ShortcutGrid extends StatelessWidget {
+class _ShortcutGrid extends ConsumerWidget {
   const _ShortcutGrid({required this.spaceId});
 
   final String spaceId;
 
   @override
-  Widget build(BuildContext context) {
-    final shortcuts = [
-      (
-        Icons.map_outlined,
-        context.l10n.floorPlan,
-        '/space/$spaceId/floor-plan',
-      ),
-      (Icons.inventory_2_outlined, '물건 목록', '/space/$spaceId/items'),
-      (
-        Icons.shopping_cart_outlined,
-        context.l10n.shopping,
-        '/space/$spaceId/shopping',
-      ),
-      (
-        Icons.checklist_outlined,
-        context.l10n.checklist,
-        '/space/$spaceId/checklist',
-      ),
-    ];
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: shortcuts.length,
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        childAspectRatio: 1.8,
-      ),
-      itemBuilder: (context, index) => Card(
-        color: Theme.of(context).colorScheme.primaryContainer
-            .withValues(alpha: .55),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(18),
-          onTap: () => context.go(shortcuts[index].$3),
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Row(
-              children: [
-                Icon(shortcuts[index].$1),
-                const SizedBox(width: 10),
-                Flexible(
-                  child: Text(
-                    shortcuts[index].$2,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
+  Widget build(BuildContext context, WidgetRef ref) {
+    const defaultKeys = ['floor_plan', 'items', 'shopping', 'checklist'];
+    final configured = ref.watch(homeShortcutsProvider).value ?? defaultKeys;
+    final keys = configured.isEmpty ? defaultKeys : configured.take(4).toList();
+    final allShortcuts = _shortcutDefinitions(context);
+    final shortcuts = keys
+        .map((key) => allShortcuts[key])
+        .whereType<({IconData icon, String label, String path})>()
+        .toList();
+    return Column(
+      children: [
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton.icon(
+            onPressed: () => _editShortcuts(context, ref, keys),
+            icon: const Icon(Icons.tune, size: 18),
+            label: Text(context.l10n.editShortcuts),
+          ),
+        ),
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: shortcuts.length,
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            mainAxisSpacing: 12,
+            crossAxisSpacing: 12,
+            childAspectRatio: 1.8,
+          ),
+          itemBuilder: (context, index) => Card(
+            color: Theme.of(context).colorScheme.primaryContainer
+                .withValues(alpha: .55),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(18),
+              onTap: () => context.go(shortcuts[index].path),
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Row(
+                  children: [
+                    Icon(shortcuts[index].icon),
+                    const SizedBox(width: 10),
+                    Flexible(
+                      child: Text(
+                        shortcuts[index].label,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
         ),
+      ],
+    );
+  }
+
+  Map<String, ({IconData icon, String label, String path})>
+  _shortcutDefinitions(BuildContext context) => {
+    'floor_plan': (
+      icon: Icons.map_outlined,
+      label: context.l10n.floorPlan,
+      path: '/space/$spaceId/floor-plan',
+    ),
+    'items': (
+      icon: Icons.inventory_2_outlined,
+      label: context.l10n.addItem,
+      path: '/space/$spaceId/items',
+    ),
+    'shopping': (
+      icon: Icons.shopping_cart_outlined,
+      label: context.l10n.shopping,
+      path: '/space/$spaceId/shopping',
+    ),
+    'checklist': (
+      icon: Icons.checklist_outlined,
+      label: context.l10n.checklist,
+      path: '/space/$spaceId/checklist',
+    ),
+    'more': (
+      icon: Icons.menu,
+      label: context.l10n.more,
+      path: '/space/$spaceId/more',
+    ),
+  };
+
+  Future<void> _editShortcuts(
+    BuildContext context,
+    WidgetRef ref,
+    List<String> current,
+  ) async {
+    final definitions = _shortcutDefinitions(context);
+    final selected = current.toSet();
+    final result = await showDialog<List<String>>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(context.l10n.editShortcuts),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final entry in definitions.entries)
+                CheckboxListTile(
+                  value: selected.contains(entry.key),
+                  title: Text(entry.value.label),
+                  secondary: Icon(entry.value.icon),
+                  onChanged: (value) {
+                    if (value == true && selected.length >= 4) return;
+                    setDialogState(() {
+                      if (value == true) {
+                        selected.add(entry.key);
+                      } else {
+                        selected.remove(entry.key);
+                      }
+                    });
+                  },
+                ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(context.l10n.shortcutLimit),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(context.l10n.cancel),
+            ),
+            FilledButton(
+              onPressed: selected.isEmpty
+                  ? null
+                  : () => Navigator.pop(context, selected.toList()),
+              child: Text(context.l10n.save),
+            ),
+          ],
+        ),
       ),
     );
+    if (result == null) return;
+    await ref.read(workspaceActionsProvider).saveHomeShortcuts(result);
   }
 }
 

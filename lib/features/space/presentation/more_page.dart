@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -16,23 +17,110 @@ class MorePage extends ConsumerWidget {
   final String spaceId;
 
   Future<void> _invite(BuildContext context, WidgetRef ref) async {
-    final invite = await ref
-        .read(workspaceActionsProvider)
-        .createInvite(spaceId);
+    var invites = await ref.read(invitesProvider(spaceId).future);
     if (!context.mounted) return;
     await showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(context.l10n.invite),
-        content: SelectableText(
-          '초대 코드\n${invite.code}\n\n만료: ${invite.expiresAt.toLocal()}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(context.l10n.close),
-          ),
-        ],
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final now = DateTime.now().toUtc();
+          return AlertDialog(
+            title: Text(context.l10n.invite),
+            content: SizedBox(
+              width: 420,
+              child: invites.isEmpty
+                  ? Text(context.l10n.inviteUnavailable)
+                  : ListView(
+                      shrinkWrap: true,
+                      children: [
+                        for (final invite in invites)
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: SelectableText(invite.code),
+                            subtitle: Text(
+                              invite.revokedAt != null
+                                  ? context.l10n.revoked
+                                  : invite.expiresAt.isBefore(now)
+                                  ? context.l10n.expired
+                                  : context.l10n.expiry(invite.expiresAt),
+                            ),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  tooltip: context.l10n.copyLink,
+                                  icon: const Icon(Icons.copy),
+                                  onPressed: invite.revokedAt != null
+                                      ? null
+                                      : () async {
+                                          final link =
+                                              'whereisthat:///invite/${invite.code}';
+                                          await Clipboard.setData(
+                                            ClipboardData(text: link),
+                                          );
+                                          if (context.mounted) {
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                                  SnackBar(
+                                                    content: Text(
+                                                      context.l10n.linkCopied,
+                                                    ),
+                                                  ),
+                                                );
+                                          }
+                                        },
+                                ),
+                                IconButton(
+                                  tooltip: context.l10n.delete,
+                                  icon: const Icon(Icons.block_outlined),
+                                  onPressed:
+                                      invite.revokedAt != null ||
+                                          invite.expiresAt.isBefore(now)
+                                      ? null
+                                      : () async {
+                                          await ref
+                                              .read(workspaceActionsProvider)
+                                              .revokeInvite(invite);
+                                          setDialogState(
+                                            () => invites = invites
+                                                .map(
+                                                  (entry) =>
+                                                      entry.id == invite.id
+                                                      ? entry.copyWith(
+                                                          revokedAt:
+                                                              DateTime.now()
+                                                                  .toUtc(),
+                                                        )
+                                                      : entry,
+                                                )
+                                                .toList(),
+                                          );
+                                        },
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(context.l10n.close),
+              ),
+              FilledButton.icon(
+                onPressed: () async {
+                  final created = await ref
+                      .read(workspaceActionsProvider)
+                      .createInvite(spaceId);
+                  setDialogState(() => invites = [created, ...invites]);
+                },
+                icon: const Icon(Icons.add_link),
+                label: Text(context.l10n.add),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -50,14 +138,14 @@ class MorePage extends ConsumerWidget {
               children: [
                 ListTile(
                   leading: const Icon(Icons.inventory_2_outlined),
-                  title: const Text('물건 목록'),
+                  title: Text(context.l10n.itemList),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => context.go('/space/$spaceId/items'),
                 ),
                 ListTile(
                   leading: const Icon(Icons.delete_sweep_outlined),
-                  title: const Text('휴지통'),
-                  subtitle: const Text('30일 이내 삭제한 데이터 복구'),
+                  title: Text(context.l10n.trash),
+                  subtitle: Text(context.l10n.trashSubtitle),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => _showTrash(context, ref),
                 ),
@@ -88,8 +176,8 @@ class MorePage extends ConsumerWidget {
                 ),
                 ListTile(
                   leading: const Icon(Icons.campaign_outlined),
-                  title: const Text('공지'),
-                  subtitle: const Text('새로운 소식을 확인하세요.'),
+                  title: Text(context.l10n.notice),
+                  subtitle: Text(context.l10n.noticeSubtitle),
                   onTap: () => _showNotices(context, ref),
                 ),
               ],
@@ -97,11 +185,9 @@ class MorePage extends ConsumerWidget {
           ),
           const SizedBox(height: 12),
           if (repository.isDemoMode)
-            const Padding(
+            Padding(
               padding: EdgeInsets.all(12),
-              child: Text(
-                '현재 데모 저장소를 사용 중입니다. Supabase URL과 anon key를 주입하면 dev/prod 서버로 전환됩니다.',
-              ),
+              child: Text(context.l10n.demoRepositoryMessage),
             ),
         ],
       ),
@@ -141,7 +227,9 @@ class MorePage extends ConsumerWidget {
                           PopupMenuItem(
                             value: member.role == 'admin' ? 'member' : 'admin',
                             child: Text(
-                              member.role == 'admin' ? '일반 멤버로 변경' : '관리자로 승격',
+                              member.role == 'admin'
+                                  ? context.l10n.demoteMember
+                                  : context.l10n.promoteAdmin,
                             ),
                           ),
                         ],
@@ -173,15 +261,23 @@ class MorePage extends ConsumerWidget {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
             children: [
-              Text('휴지통', style: Theme.of(context).textTheme.titleLarge),
+              Text(
+                context.l10n.trash,
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
               const SizedBox(height: 12),
               if (items.isEmpty && plans.isEmpty && locations.isEmpty)
-                const Text('복구할 데이터가 없습니다.'),
+                Text(context.l10n.noRestorableData),
               for (final item in items)
                 ListTile(
                   leading: const Icon(Icons.inventory_2_outlined),
                   title: Text(item.name),
-                  subtitle: Text('물건 · ${_purgeLabel(item.deletePurgeAt)}'),
+                  subtitle: Text(
+                    context.l10n.trashEntry(
+                      context.l10n.itemList,
+                      item.deletePurgeAt,
+                    ),
+                  ),
                   trailing: IconButton(
                     tooltip: context.l10n.restore,
                     icon: const Icon(Icons.restore),
@@ -193,7 +289,12 @@ class MorePage extends ConsumerWidget {
                 ListTile(
                   leading: const Icon(Icons.map_outlined),
                   title: Text(plan.name),
-                  subtitle: Text('평면도 · ${_purgeLabel(plan.deletePurgeAt)}'),
+                  subtitle: Text(
+                    context.l10n.trashEntry(
+                      context.l10n.floorPlan,
+                      plan.deletePurgeAt,
+                    ),
+                  ),
                   trailing: IconButton(
                     tooltip: context.l10n.restore,
                     icon: const Icon(Icons.restore),
@@ -206,7 +307,12 @@ class MorePage extends ConsumerWidget {
                 ListTile(
                   leading: const Icon(Icons.location_on_outlined),
                   title: Text(location.name),
-                  subtitle: Text('위치 · ${_purgeLabel(location.deletePurgeAt)}'),
+                  subtitle: Text(
+                    context.l10n.trashEntry(
+                      context.l10n.location,
+                      location.deletePurgeAt,
+                    ),
+                  ),
                   trailing: IconButton(
                     tooltip: context.l10n.restore,
                     icon: const Icon(Icons.restore),
@@ -222,9 +328,6 @@ class MorePage extends ConsumerWidget {
     );
   }
 
-  String _purgeLabel(DateTime? date) =>
-      date == null ? '30일 보관' : '영구 삭제 예정 ${date.toLocal()}';
-
   Future<void> _showNotices(BuildContext context, WidgetRef ref) async {
     final notices = await ref.read(noticesProvider.future);
     if (!context.mounted) return;
@@ -232,9 +335,9 @@ class MorePage extends ConsumerWidget {
       context: context,
       builder: (context) => SafeArea(
         child: notices.isEmpty
-            ? const Padding(
+            ? Padding(
                 padding: EdgeInsets.all(24),
-                child: Text('새로운 공지가 없습니다.'),
+                child: Text(context.l10n.noNotices),
               )
             : ListView(
                 shrinkWrap: true,
@@ -264,12 +367,12 @@ class MorePage extends ConsumerWidget {
     final displayName = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('공간별 표시 이름'),
+        title: Text(context.l10n.displayNameTitle),
         content: TextField(
           controller: controller,
           autofocus: true,
           maxLength: 40,
-          decoration: const InputDecoration(labelText: '표시 이름'),
+          decoration: InputDecoration(labelText: context.l10n.displayName),
         ),
         actions: [
           TextButton(
@@ -301,17 +404,26 @@ class MorePage extends ConsumerWidget {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
                 child: Text(
-                  '테마',
+                  context.l10n.theme,
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: SegmentedButton<ThemeMode>(
-                  segments: const [
-                    ButtonSegment(value: ThemeMode.system, label: Text('시스템')),
-                    ButtonSegment(value: ThemeMode.light, label: Text('라이트')),
-                    ButtonSegment(value: ThemeMode.dark, label: Text('다크')),
+                  segments: [
+                    ButtonSegment(
+                      value: ThemeMode.system,
+                      label: Text(context.l10n.systemTheme),
+                    ),
+                    ButtonSegment(
+                      value: ThemeMode.light,
+                      label: Text(context.l10n.lightTheme),
+                    ),
+                    ButtonSegment(
+                      value: ThemeMode.dark,
+                      label: Text(context.l10n.darkTheme),
+                    ),
                   ],
                   selected: {themeMode},
                   onSelectionChanged: (value) async {
@@ -333,7 +445,7 @@ class MorePage extends ConsumerWidget {
               ),
               ListTile(
                 leading: const Icon(Icons.person_add_alt_1),
-                title: const Text('로그인 수단 연결'),
+                title: Text(context.l10n.linkIdentity),
                 onTap: () => _showIdentityLinks(context, ref),
               ),
               ListTile(
@@ -343,7 +455,7 @@ class MorePage extends ConsumerWidget {
               ),
               ListTile(
                 leading: const Icon(Icons.exit_to_app),
-                title: const Text('이 공간에서 탈퇴'),
+                title: Text(context.l10n.leaveSpace),
                 onTap: () => _leave(context, ref),
               ),
               ListTile(
@@ -351,7 +463,7 @@ class MorePage extends ConsumerWidget {
                   Icons.delete_forever_outlined,
                   color: Theme.of(context).colorScheme.error,
                 ),
-                title: const Text('공간 삭제'),
+                title: Text(context.l10n.deleteSpace),
                 onTap: () => _deleteSpace(context, ref),
               ),
               ListTile(
@@ -359,7 +471,7 @@ class MorePage extends ConsumerWidget {
                   Icons.person_off_outlined,
                   color: Theme.of(context).colorScheme.error,
                 ),
-                title: const Text('회원 탈퇴'),
+                title: Text(context.l10n.deleteAccount),
                 onTap: () => _deleteAccount(context, ref),
               ),
             ],
@@ -370,26 +482,92 @@ class MorePage extends ConsumerWidget {
   }
 
   Future<void> _leave(BuildContext context, WidgetRef ref) async {
-    final confirmed = await showDialog<bool>(
+    final otherSpaces = (ref.read(spacesProvider).value ?? const <Space>[])
+        .where((space) => space.id != spaceId)
+        .toList();
+    var action = 'keep';
+    String? targetSpaceId = otherSpaces.firstOrNull?.id;
+    final choice = await showDialog<({String action, String? targetSpaceId})>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('공간에서 탈퇴할까요?'),
-        content: const Text('공용 데이터는 공간에 남습니다.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(context.l10n.cancel),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(context.l10n.leaveSpaceQuestion),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(context.l10n.leaveSpaceDescription),
+              const SizedBox(height: 12),
+              SegmentedButton<String>(
+                segments: [
+                  ButtonSegment(
+                    value: 'keep',
+                    label: Text(context.l10n.keepData),
+                  ),
+                  ButtonSegment(
+                    value: 'move',
+                    label: Text(context.l10n.moveData),
+                  ),
+                  ButtonSegment(
+                    value: 'delete',
+                    label: Text(context.l10n.deleteData),
+                  ),
+                ],
+                selected: {action},
+                onSelectionChanged: (value) =>
+                    setDialogState(() => action = value.first),
+              ),
+              if (action == 'move' && otherSpaces.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: targetSpaceId,
+                  decoration: InputDecoration(
+                    labelText: context.l10n.targetSpace,
+                  ),
+                  items: [
+                    for (final space in otherSpaces)
+                      DropdownMenuItem(
+                        value: space.id,
+                        child: Text(space.name),
+                      ),
+                  ],
+                  onChanged: (value) =>
+                      setDialogState(() => targetSpaceId = value),
+                ),
+              ],
+              if (action == 'move' && otherSpaces.isEmpty)
+                Padding(
+                  padding: EdgeInsets.only(top: 12),
+                  child: Text(context.l10n.noOtherSpace),
+                ),
+            ],
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('탈퇴'),
-          ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(context.l10n.cancel),
+            ),
+            FilledButton(
+              onPressed: action == 'move' && targetSpaceId == null
+                  ? null
+                  : () => Navigator.pop(context, (
+                      action: action,
+                      targetSpaceId: targetSpaceId,
+                    )),
+              child: Text(context.l10n.leave),
+            ),
+          ],
+        ),
       ),
     );
-    if (confirmed != true) return;
+    if (choice == null) return;
     try {
-      await ref.read(workspaceActionsProvider).leaveSpace(spaceId);
+      await ref
+          .read(workspaceActionsProvider)
+          .leaveSpaceWithDataAction(
+            spaceId,
+            personalDataAction: choice.action,
+            targetSpaceId: choice.targetSpaceId,
+          );
       if (context.mounted) context.go('/spaces');
     } catch (error) {
       if (context.mounted) {
@@ -407,11 +585,11 @@ class MorePage extends ConsumerWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('공간을 삭제할까요?'),
+        title: Text(context.l10n.deleteSpaceQuestion),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('삭제 후 30일 동안 복구할 수 있습니다. 확인하려면 공간 이름을 입력하세요.'),
+            Text(context.l10n.deleteSpaceDescription),
             const SizedBox(height: 12),
             TextField(
               controller: controller,
@@ -442,8 +620,8 @@ class MorePage extends ConsumerWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('회원 탈퇴'),
-        content: const Text('30일 유예 기간 동안 복구할 수 있습니다. 계속할까요?'),
+        title: Text(context.l10n.deleteAccountQuestion),
+        content: Text(context.l10n.deleteAccountDescription),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -451,14 +629,14 @@ class MorePage extends ConsumerWidget {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('탈퇴 신청'),
+            child: Text(context.l10n.requestDeletion),
           ),
         ],
       ),
     );
     if (confirmed != true) return;
     await ref.read(authActionsProvider).deleteAccount();
-    if (context.mounted) context.go('/auth');
+    if (context.mounted) context.go('/account-recovery');
   }
 
   Future<void> _showIdentityLinks(BuildContext context, WidgetRef ref) async {
@@ -468,13 +646,17 @@ class MorePage extends ConsumerWidget {
         child: Wrap(
           children: [
             for (final entry in <(SocialProvider, String)>[
-              (SocialProvider.kakao, '카카오'),
-              (SocialProvider.naver, '네이버'),
-              (SocialProvider.google, 'Google'),
-              (SocialProvider.apple, 'Apple'),
+              (SocialProvider.kakao, 'kakao'),
+              (SocialProvider.naver, 'naver'),
+              (SocialProvider.google, 'google'),
+              (SocialProvider.apple, 'apple'),
             ])
               ListTile(
-                title: Text('${entry.$2} 계정 연결'),
+                title: Text(
+                  context.l10n.identityLink(
+                    context.l10n.providerName(entry.$2),
+                  ),
+                ),
                 onTap: () async {
                   await ref.read(authActionsProvider).linkIdentity(entry.$1);
                   if (context.mounted) Navigator.pop(context);

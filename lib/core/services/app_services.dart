@@ -21,15 +21,21 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 }
 
 class AppServices {
-  AppServices._({required this.firebaseReady, required this.adsEnabled});
+  AppServices._({
+    required this.firebaseReady,
+    required this.adsEnabled,
+    required this.adPolicy,
+  });
 
   static AppServices current = AppServices._(
     firebaseReady: false,
     adsEnabled: false,
+    adPolicy: AdPolicyService(),
   );
 
   final bool firebaseReady;
   final bool adsEnabled;
+  final AdPolicyService adPolicy;
 
   static Future<AppServices> initialize(AppConfig config) async {
     var firebaseReady = false;
@@ -65,6 +71,7 @@ class AppServices {
     final services = AppServices._(
       firebaseReady: firebaseReady,
       adsEnabled: config.adsEnabled,
+      adPolicy: AdPolicyService(enabled: config.adsEnabled),
     );
     AppServices.current = services;
     return services;
@@ -81,15 +88,21 @@ class AppServices {
       if (settings.authorizationStatus == AuthorizationStatus.denied) return;
       final token = await FirebaseMessaging.instance.getToken();
       if (token == null || token.isEmpty) return;
+      const appVersion = String.fromEnvironment(
+        'APP_VERSION',
+        defaultValue: '1.0.0',
+      );
       await repository.registerDevice(
         platform: Platform.isIOS ? 'ios' : 'android',
         token: token,
+        appVersion: appVersion,
       );
       FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
         unawaited(
           repository.registerDevice(
             platform: Platform.isIOS ? 'ios' : 'android',
             token: newToken,
+            appVersion: appVersion,
           ),
         );
       });
@@ -124,6 +137,38 @@ class AppServices {
   Future<void> recordError(Object error, StackTrace stack) async {
     if (!firebaseReady) return;
     await FirebaseCrashlytics.instance.recordError(error, stack);
+  }
+
+  Future<void> showInterstitialIfAllowed() async {
+    if (!adsEnabled || !adPolicy.canShowInterstitial()) return;
+    final completer = Completer<void>();
+    await InterstitialAd.load(
+      adUnitId: const String.fromEnvironment(
+        'ADMOB_INTERSTITIAL_ID',
+        defaultValue: 'ca-app-pub-3940256099942544/1033173712',
+      ),
+      request: const AdRequest(),
+      adLoadCallback: InterstitialAdLoadCallback(
+        onAdLoaded: (ad) {
+          ad.fullScreenContentCallback = FullScreenContentCallback(
+            onAdDismissedFullScreenContent: (ad) {
+              ad.dispose();
+              if (!completer.isCompleted) completer.complete();
+            },
+            onAdFailedToShowFullScreenContent: (ad, error) {
+              ad.dispose();
+              if (!completer.isCompleted) completer.complete();
+            },
+          );
+          adPolicy.markInterstitialShown();
+          ad.show();
+        },
+        onAdFailedToLoad: (_) {
+          if (!completer.isCompleted) completer.complete();
+        },
+      ),
+    );
+    await completer.future;
   }
 }
 

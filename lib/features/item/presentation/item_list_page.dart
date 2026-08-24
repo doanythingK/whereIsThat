@@ -50,7 +50,7 @@ class _ItemListPageState extends ConsumerState<ItemListPage> {
     );
     return Scaffold(
       appBar: AppBar(
-        title: Text('물건 목록'),
+        title: Text(context.l10n.itemList),
         actions: [
           IconButton(onPressed: () => _edit(), icon: const Icon(Icons.add)),
         ],
@@ -159,7 +159,7 @@ class _ItemTile extends ConsumerWidget {
           itemBuilder: (context) => [
             PopupMenuItem(
               value: 'favorite',
-              child: Text(item.isFavorite ? '즐겨찾기 해제' : context.l10n.favorites),
+              child: Text(context.l10n.favoriteAction(item.isFavorite)),
             ),
             PopupMenuItem(value: 'delete', child: Text(context.l10n.delete)),
           ],

@@ -137,5 +137,76 @@ void main() {
       );
       expect(items, isNotEmpty);
     });
+
+    test(
+      'photo primary, user template, shortcuts, and invite lifecycle work',
+      () async {
+        final repository = DemoAppRepository();
+        final item = (await repository.listItems('demo-space')).first;
+        final first = await repository.uploadItemPhoto(
+          item: item,
+          bytes: Uint8List.fromList([1]),
+          extension: 'jpg',
+        );
+        final withFirst = item.copyWith(photos: [first]);
+        final second = await repository.uploadItemPhoto(
+          item: withFirst,
+          bytes: Uint8List.fromList([2]),
+          extension: 'jpg',
+        );
+        await repository.setPrimaryItemPhoto(
+          withFirst.copyWith(photos: [first, second]),
+          second,
+        );
+        final photoItem = (await repository.listItems('demo-space'))
+            .singleWhere((entry) => entry.id == item.id);
+        expect(
+          photoItem.photos
+              .singleWhere((photo) => photo.id == second.id)
+              .isPrimary,
+          isTrue,
+        );
+
+        final template = await repository.createChecklistTemplate(
+          name: '나만의 준비',
+        );
+        await repository.saveChecklistTemplateItem(
+          templateId: template.id,
+          name: '물병',
+          sortOrder: 0,
+        );
+        expect(
+          await repository.listChecklistTemplateItems(template.id),
+          hasLength(1),
+        );
+
+        await repository.saveHomeShortcuts([
+          'items',
+          'more',
+          'shopping',
+          'checklist',
+          'extra',
+        ]);
+        expect(await repository.getHomeShortcuts(), [
+          'items',
+          'more',
+          'shopping',
+          'checklist',
+        ]);
+
+        final invite = await repository.createInvite(
+          'demo-space',
+          const Duration(days: 1),
+        );
+        expect((await repository.listInvites('demo-space')), contains(invite));
+        await repository.revokeInvite(invite);
+        expect(
+          (await repository.listInvites('demo-space'))
+              .singleWhere((entry) => entry.id == invite.id)
+              .revokedAt,
+          isNotNull,
+        );
+      },
+    );
   });
 }

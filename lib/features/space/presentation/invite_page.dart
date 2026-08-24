@@ -51,15 +51,17 @@ class _InvitePageState extends ConsumerState<InvitePage> {
               children: [
                 const Icon(Icons.group_add_outlined, size: 64),
                 const SizedBox(height: 16),
-                const Text(
-                  '공간 초대가 도착했어요.',
+                Text(
+                  context.l10n.inviteReceived,
                   textAlign: TextAlign.center,
                   style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 24),
                 if (user == null)
                   FilledButton(
-                    onPressed: () => context.go('/auth'),
+                    onPressed: () => context.go(
+                      '/auth?invite=${Uri.encodeQueryComponent(widget.code)}',
+                    ),
                     child: Text(context.l10n.signIn),
                   )
                 else
@@ -67,7 +69,7 @@ class _InvitePageState extends ConsumerState<InvitePage> {
                     onPressed: _accepting ? null : _accept,
                     child: _accepting
                         ? const CircularProgressIndicator()
-                        : const Text('초대 수락'),
+                        : Text(context.l10n.acceptInvite),
                   ),
                 if (_error != null) ...[
                   const SizedBox(height: 12),

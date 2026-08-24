@@ -28,7 +28,11 @@ class AuthActions {
 
   Future<void> deleteAccount() async {
     await ref.read(appRepositoryProvider).deleteAccount();
-    await ref.read(appRepositoryProvider).signOut();
     ref.invalidate(currentUserProvider);
+    ref.invalidate(accountDeletionPendingProvider);
+  }
+
+  Future<void> restoreAccount() async {
+    await ref.read(workspaceActionsProvider).restoreAccount();
   }
 }

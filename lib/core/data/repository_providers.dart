@@ -13,6 +13,12 @@ final currentUserProvider = FutureProvider<AppUser?>((ref) {
   return ref.watch(appRepositoryProvider).currentUser();
 });
 
+final accountDeletionPendingProvider = FutureProvider<bool>((ref) {
+  final authState = ref.watch(authStateProvider);
+  if (authState.isLoading || authState.value == null) return false;
+  return ref.watch(appRepositoryProvider).isAccountDeletionPending();
+});
+
 final authStateProvider = StreamProvider<AppUser?>((ref) {
   return ref.watch(appRepositoryProvider).watchAuthState();
 });
@@ -27,6 +33,14 @@ final deletedSpacesProvider = FutureProvider<List<Space>>((ref) {
 
 final noticesProvider = FutureProvider<List<AppNotice>>((ref) {
   return ref.watch(appRepositoryProvider).listNotices();
+});
+
+final homeShortcutsProvider = FutureProvider<List<String>>((ref) {
+  return ref.watch(appRepositoryProvider).getHomeShortcuts();
+});
+
+final minimumSupportedVersionProvider = FutureProvider<String?>((ref) {
+  return ref.watch(appRepositoryProvider).getMinimumSupportedVersion();
 });
 
 final floorPlansProvider = FutureProvider.family<List<FloorPlan>, String>((
@@ -47,6 +61,17 @@ final locationsProvider = FutureProvider.family<List<Location>, String>((
 ) {
   return ref.watch(appRepositoryProvider).listLocations(floorPlanId);
 });
+
+final locationsForSpaceProvider = FutureProvider.family<List<Location>, String>(
+  (ref, spaceId) async {
+    final repository = ref.watch(appRepositoryProvider);
+    final plans = await ref.watch(floorPlansProvider(spaceId).future);
+    final locations = await Future.wait(
+      plans.map((plan) => repository.listLocations(plan.id)),
+    );
+    return locations.expand((items) => items).toList();
+  },
+);
 
 final deletedLocationsProvider = FutureProvider.family<List<Location>, String>((
   ref,
@@ -134,12 +159,22 @@ final memberChecksProvider =
           ref.watch(appRepositoryProvider).listMemberChecks(checklistItemId),
     );
 
+final memberChecksStreamProvider =
+    StreamProvider.family<List<ChecklistMemberCheck>, String>(
+      (ref, checklistItemId) =>
+          ref.watch(appRepositoryProvider).watchMemberChecks(checklistItemId),
+    );
+
 final spaceMembersProvider = FutureProvider.family<List<SpaceMember>, String>((
   ref,
   spaceId,
 ) {
   return ref.watch(appRepositoryProvider).listMembers(spaceId);
 });
+
+final invitesProvider = FutureProvider.family<List<SpaceInvite>, String>(
+  (ref, spaceId) => ref.watch(appRepositoryProvider).listInvites(spaceId),
+);
 
 final workspaceActionsProvider = Provider<WorkspaceActions>(
   (ref) => WorkspaceActions(ref),
@@ -180,12 +215,17 @@ class WorkspaceActions {
 
   Future<void> revokeInvite(SpaceInvite invite) async {
     await _repository.revokeInvite(invite);
+    ref.invalidate(invitesProvider(invite.spaceId));
   }
 
   Future<SpaceInvite> createInvite(
     String spaceId, {
     Duration validity = const Duration(days: 7),
-  }) => _repository.createInvite(spaceId, validity);
+  }) async {
+    final invite = await _repository.createInvite(spaceId, validity);
+    ref.invalidate(invitesProvider(spaceId));
+    return invite;
+  }
 
   Future<void> updateMemberRole(SpaceMember member, String role) async {
     await _repository.updateMemberRole(member, role);
@@ -217,9 +257,37 @@ class WorkspaceActions {
     ref.invalidate(spacesProvider);
   }
 
+  Future<void> restoreAccount() async {
+    await _repository.restoreAccount();
+    ref.invalidate(accountDeletionPendingProvider);
+    ref.invalidate(currentUserProvider);
+    ref.invalidate(spacesProvider);
+  }
+
+  Future<void> leaveSpaceWithDataAction(
+    String spaceId, {
+    required String personalDataAction,
+    String? targetSpaceId,
+  }) async {
+    await _repository.leaveSpace(
+      spaceId,
+      personalDataAction: personalDataAction,
+      targetSpaceId: targetSpaceId,
+    );
+    ref.invalidate(spacesProvider);
+    if (targetSpaceId != null) {
+      ref.invalidate(itemsProvider((spaceId: targetSpaceId, search: null)));
+    }
+  }
+
   Future<void> accessSpace(String spaceId) async {
     await _repository.updateLastAccessed(spaceId);
     ref.invalidate(spacesProvider);
+  }
+
+  Future<void> saveHomeShortcuts(List<String> shortcuts) async {
+    await _repository.saveHomeShortcuts(shortcuts);
+    ref.invalidate(homeShortcutsProvider);
   }
 
   Future<FloorPlan> createFloorPlan({
@@ -360,6 +428,11 @@ class WorkspaceActions {
     ref.invalidate(itemsProvider((spaceId: item.spaceId, search: null)));
   }
 
+  Future<void> setPrimaryItemPhoto(Item item, ItemPhoto photo) async {
+    await _repository.setPrimaryItemPhoto(item, photo);
+    ref.invalidate(itemsProvider((spaceId: item.spaceId, search: null)));
+  }
+
   Future<String> createItemPhotoSignedUrl(ItemPhoto photo) =>
       _repository.createItemPhotoSignedUrl(photo);
 
@@ -410,6 +483,28 @@ class WorkspaceActions {
     ref.invalidate(checklistItemsProvider(item.checklistId));
     ref.invalidate(checklistItemsStreamProvider(item.checklistId));
     return saved;
+  }
+
+  Future<void> deleteChecklistItem(ChecklistItem item) async {
+    await _repository.deleteChecklistItem(item);
+    ref.invalidate(checklistItemsProvider(item.checklistId));
+    ref.invalidate(checklistItemsStreamProvider(item.checklistId));
+  }
+
+  Future<ChecklistTemplate> saveChecklistAsTemplate(Checklist checklist) async {
+    final items = await _repository.listChecklistItems(checklist.id);
+    final template = await _repository.createChecklistTemplate(
+      name: checklist.name,
+    );
+    for (final item in items) {
+      await _repository.saveChecklistTemplateItem(
+        templateId: template.id,
+        name: item.name,
+        sortOrder: item.sortOrder,
+      );
+    }
+    ref.invalidate(checklistTemplatesProvider);
+    return template;
   }
 
   Future<void> toggleChecklistItem(ChecklistItem item) async {

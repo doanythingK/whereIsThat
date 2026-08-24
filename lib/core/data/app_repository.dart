@@ -14,11 +14,16 @@ abstract interface class AppRepository {
   Future<void> linkIdentity(SocialProvider provider);
   Future<void> signOut();
   Future<void> deleteAccount();
+  Future<bool> isAccountDeletionPending();
+  Future<void> restoreAccount();
   Future<void> registerDevice({
     required String platform,
     required String token,
     String? appVersion,
   });
+  Future<List<String>> getHomeShortcuts();
+  Future<void> saveHomeShortcuts(List<String> shortcuts);
+  Future<String?> getMinimumSupportedVersion();
   Future<List<AppNotice>> listNotices();
   Future<String> acceptInvite(String code);
 
@@ -36,8 +41,13 @@ abstract interface class AppRepository {
   Future<void> updateMemberRole(SpaceMember member, String role);
   Future<void> updateMemberDisplayName(SpaceMember member, String displayName);
   Future<SpaceInvite> createInvite(String spaceId, Duration validity);
+  Future<List<SpaceInvite>> listInvites(String spaceId);
   Future<void> revokeInvite(SpaceInvite invite);
-  Future<void> leaveSpace(String spaceId);
+  Future<void> leaveSpace(
+    String spaceId, {
+    String personalDataAction = 'keep',
+    String? targetSpaceId,
+  });
   Future<void> updateLastAccessed(String spaceId);
 
   Future<List<FloorPlan>> listFloorPlans(String spaceId);
@@ -80,6 +90,7 @@ abstract interface class AppRepository {
     required String extension,
   });
   Future<void> deleteItemPhoto(Item item, ItemPhoto photo);
+  Future<void> setPrimaryItemPhoto(Item item, ItemPhoto photo);
   Future<String> createItemPhotoSignedUrl(ItemPhoto photo);
 
   Future<List<ShoppingItem>> listShoppingItems(String spaceId);
@@ -95,6 +106,12 @@ abstract interface class AppRepository {
   Future<List<ChecklistTemplateItem>> listChecklistTemplateItems(
     String templateId,
   );
+  Future<ChecklistTemplate> createChecklistTemplate({required String name});
+  Future<ChecklistTemplateItem> saveChecklistTemplateItem({
+    required String templateId,
+    required String name,
+    required double sortOrder,
+  });
   Future<List<ChecklistItem>> listChecklistItems(String checklistId);
   Future<Checklist> createChecklist({
     String? spaceId,
@@ -105,6 +122,7 @@ abstract interface class AppRepository {
     ChecklistItem item, {
     required bool isNew,
   });
+  Future<void> deleteChecklistItem(ChecklistItem item);
   Future<void> toggleChecklistItem(ChecklistItem item);
   Future<List<ChecklistMemberCheck>> listMemberChecks(String checklistItemId);
   Future<void> toggleMemberCheck(ChecklistMemberCheck check);
@@ -112,4 +130,5 @@ abstract interface class AppRepository {
 
   Stream<List<ShoppingItem>> watchShoppingItems(String spaceId);
   Stream<List<ChecklistItem>> watchChecklistItems(String checklistId);
+  Stream<List<ChecklistMemberCheck>> watchMemberChecks(String checklistItemId);
 }

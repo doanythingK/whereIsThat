@@ -20,7 +20,7 @@ class ShoppingPage extends ConsumerWidget {
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(labelText: '구매할 항목'),
+          decoration: InputDecoration(labelText: context.l10n.purchaseItem),
         ),
         actions: [
           TextButton(
@@ -44,8 +44,8 @@ class ShoppingPage extends ConsumerWidget {
       final addAnyway = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('중복 항목이 있어요'),
-          content: Text('이미 "$name" 항목이 있습니다. 그래도 추가할까요?'),
+          title: Text(context.l10n.duplicateShoppingItem),
+          content: Text(context.l10n.duplicateShoppingMessage(name)),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
@@ -86,12 +86,12 @@ class ShoppingPage extends ConsumerWidget {
           children: [
             ListTile(
               leading: const Icon(Icons.inventory_2_outlined),
-              title: const Text('집에 등록하기'),
+              title: Text(context.l10n.registerAtHome),
               onTap: () => Navigator.pop(context, 'register'),
             ),
             ListTile(
               leading: const Icon(Icons.check),
-              title: const Text('그냥 완료'),
+              title: Text(context.l10n.completeOnly),
               onTap: () => Navigator.pop(context, 'done'),
             ),
           ],
@@ -118,11 +118,11 @@ class ShoppingPage extends ConsumerWidget {
     final selected = await showDialog<String>(
       context: context,
       builder: (context) => SimpleDialog(
-        title: const Text('담당자 선택'),
+        title: Text(context.l10n.chooseAssignee),
         children: [
           SimpleDialogOption(
             onPressed: () => Navigator.pop(context, ''),
-            child: const Text('담당자 없음'),
+            child: Text(context.l10n.noAssignee),
           ),
           for (final member in members)
             SimpleDialogOption(
@@ -165,6 +165,7 @@ class ShoppingPage extends ConsumerWidget {
                   itemCount: values.length,
                   onReorderItem: (oldIndex, newIndex) async {
                     final moved = values.removeAt(oldIndex);
+                    if (newIndex > oldIndex) newIndex -= 1;
                     values.insert(newIndex, moved);
                     for (var index = 0; index < values.length; index++) {
                       await ref
@@ -203,17 +204,17 @@ class ShoppingPage extends ConsumerWidget {
                           ),
                           subtitle: item.assigneeUserId == null
                               ? null
-                              : const Text('담당자 지정됨'),
+                              : Text(context.l10n.assigned),
                           secondary: PopupMenuButton<String>(
                             onSelected: (value) {
                               if (value == 'assign') {
                                 _assign(context, ref, item);
                               }
                             },
-                            itemBuilder: (context) => const [
+                            itemBuilder: (context) => [
                               PopupMenuItem(
                                 value: 'assign',
-                                child: Text('담당자 지정'),
+                                child: Text(context.l10n.assign),
                               ),
                             ],
                             icon: const Icon(Icons.person_outline),

@@ -38,6 +38,7 @@ flutter run
 ```bash
 flutter run \
   --dart-define=APP_ENV=dev \
+  --dart-define=APP_VERSION=1.0.0 \
   --dart-define=SUPABASE_URL=https://<dev-project>.supabase.co \
   --dart-define=SUPABASE_ANON_KEY=<publishable-or-anon-key>
 ```
@@ -46,9 +47,11 @@ Service Role Key, DB 비밀번호, FCM 서버 키, 스토어 키는 앱이나 �
 
 ## Supabase
 
-`supabase/migrations/202608230001_mvp.sql`을 dev 프로젝트에 먼저 적용한 뒤 RLS와 OAuth provider 설정을 확인합니다. 운영 프로젝트에는 dev 검증 후 같은 migration을 승격합니다.
+`supabase/migrations/202608230001_mvp.sql`을 dev 프로젝트에 먼저 적용하고, 이미 적용한 환경에는 이어서 `supabase/migrations/202608240001_mvp_hardening.sql`도 적용한 뒤 RLS와 OAuth provider 설정을 확인합니다. 운영 프로젝트에는 dev 검증 후 같은 migration 순서를 승격합니다.
 
 30일 Soft Delete purge는 `supabase/functions/purge_deleted_data` Edge Function을 Supabase Cron에서 하루 한 번 호출하도록 설정합니다. Edge Function에만 `SUPABASE_SERVICE_ROLE_KEY`를 secret으로 등록합니다.
+
+공간 멤버·장보기·공유 체크리스트 변경 알림은 `supabase/functions/dispatch_notifications`를 Cron으로 호출합니다. `FCM_PROJECT_ID`, `FCM_CLIENT_EMAIL`, `FCM_PRIVATE_KEY`도 Edge Function secret으로만 등록합니다. 최소 지원 버전은 `app_config`의 `minimum_supported_version` 키에 문자열 또는 `{ "version": "1.0.0" }` JSON으로 설정합니다.
 
 필수 OAuth/플랫폼 설정:
 

@@ -83,6 +83,21 @@ class SupabaseAppRepository implements AppRepository {
   }
 
   @override
+  Future<bool> isAccountDeletionPending() async {
+    final row = await _client
+        .from('profiles')
+        .select('deleted_at')
+        .eq('id', _requireUserId())
+        .maybeSingle();
+    return row?['deleted_at'] != null;
+  }
+
+  @override
+  Future<void> restoreAccount() async {
+    await _client.rpc('restore_account');
+  }
+
+  @override
   Future<void> registerDevice({
     required String platform,
     required String token,
@@ -97,6 +112,40 @@ class SupabaseAppRepository implements AppRepository {
       'last_seen_at': _now().toIso8601String(),
       'updated_at': _now().toIso8601String(),
     }, onConflict: 'fcm_token');
+  }
+
+  @override
+  Future<List<String>> getHomeShortcuts() async {
+    final row = await _client
+        .from('user_settings')
+        .select('shortcut_config')
+        .eq('user_id', _requireUserId())
+        .maybeSingle();
+    final value = row?['shortcut_config'];
+    if (value is! List) return const [];
+    return value.whereType<String>().take(4).toList();
+  }
+
+  @override
+  Future<void> saveHomeShortcuts(List<String> shortcuts) async {
+    await _client.from('user_settings').upsert({
+      'user_id': _requireUserId(),
+      'shortcut_config': shortcuts.take(4).toList(),
+      'updated_at': _now().toIso8601String(),
+    }, onConflict: 'user_id');
+  }
+
+  @override
+  Future<String?> getMinimumSupportedVersion() async {
+    final row = await _client
+        .from('app_config')
+        .select('value')
+        .eq('key', 'minimum_supported_version')
+        .maybeSingle();
+    final value = row?['value'];
+    if (value is String) return value;
+    if (value is Map) return value['version'] as String?;
+    return null;
   }
 
   @override
@@ -142,6 +191,7 @@ class SupabaseAppRepository implements AppRepository {
           .from('space_members')
           .select('last_accessed_at')
           .eq('space_id', row['id'] as String)
+          .eq('user_id', _requireUserId())
           .isFilter('deleted_at', null);
       final memberRows = members as List;
       for (final rawMember in memberRows) {
@@ -274,6 +324,16 @@ class SupabaseAppRepository implements AppRepository {
   }
 
   @override
+  Future<List<SpaceInvite>> listInvites(String spaceId) async {
+    final rows = await _client
+        .from('space_invites')
+        .select()
+        .eq('space_id', spaceId)
+        .order('created_at', ascending: false);
+    return (rows as List).map((row) => SpaceInvite.fromJson(row)).toList();
+  }
+
+  @override
   Future<void> revokeInvite(SpaceInvite invite) async {
     await _client
         .from('space_invites')
@@ -282,8 +342,19 @@ class SupabaseAppRepository implements AppRepository {
   }
 
   @override
-  Future<void> leaveSpace(String spaceId) async {
-    await _client.rpc('leave_space', params: {'target_space_id': spaceId});
+  Future<void> leaveSpace(
+    String spaceId, {
+    String personalDataAction = 'keep',
+    String? targetSpaceId,
+  }) async {
+    await _client.rpc(
+      'leave_space',
+      params: {
+        'target_space_id': spaceId,
+        'personal_data_action': personalDataAction,
+        'target_destination_space_id': targetSpaceId,
+      },
+    );
   }
 
   @override
@@ -549,6 +620,29 @@ class SupabaseAppRepository implements AppRepository {
         }),
       );
     }
+    if (normalizedSearch != null && normalizedSearch.isNotEmpty) {
+      result.sort((a, b) {
+        int rank(Item item) {
+          final name = item.name.toLowerCase();
+          if (name == normalizedSearch) return 0;
+          if (name.startsWith(normalizedSearch)) return 1;
+          if (name.contains(normalizedSearch)) return 2;
+          return 3;
+        }
+
+        final rankComparison = rank(a).compareTo(rank(b));
+        return rankComparison == 0 ? a.name.compareTo(b.name) : rankComparison;
+      });
+    } else {
+      result.sort((a, b) {
+        final aLocation = locationNames[a.locationId] ?? '\uffff';
+        final bLocation = locationNames[b.locationId] ?? '\uffff';
+        final locationComparison = aLocation.compareTo(bLocation);
+        return locationComparison == 0
+            ? a.name.compareTo(b.name)
+            : locationComparison;
+      });
+    }
     return result;
   }
 
@@ -613,15 +707,21 @@ class SupabaseAppRepository implements AppRepository {
 
   @override
   Future<void> softDeleteItem(Item item) async {
-    await _client
+    final row = await _client
         .from('items')
         .update({
           'deleted_at': _now().toIso8601String(),
           'delete_purge_at': _now()
               .add(const Duration(days: 30))
               .toIso8601String(),
+          'version': item.version + 1,
         })
-        .eq('id', item.id);
+        .eq('id', item.id)
+        .eq('version', item.version)
+        .isFilter('deleted_at', null)
+        .select('id')
+        .maybeSingle();
+    if (row == null) throw const ConflictException();
   }
 
   @override
@@ -718,6 +818,14 @@ class SupabaseAppRepository implements AppRepository {
   Future<void> deleteItemPhoto(Item item, ItemPhoto photo) async {
     await _client.storage.from('item-photos').remove([photo.storagePath]);
     await _client.from('item_photos').delete().eq('id', photo.id);
+  }
+
+  @override
+  Future<void> setPrimaryItemPhoto(Item item, ItemPhoto photo) async {
+    await _client.rpc(
+      'set_item_primary_photo',
+      params: {'target_item_id': item.id, 'target_photo_id': photo.id},
+    );
   }
 
   @override
@@ -852,6 +960,49 @@ class SupabaseAppRepository implements AppRepository {
   }
 
   @override
+  Future<ChecklistTemplate> createChecklistTemplate({
+    required String name,
+  }) async {
+    final row = await _client
+        .from('checklist_templates')
+        .insert({
+          'owner_user_id': _requireUserId(),
+          'template_type': 'user',
+          'name': name.trim(),
+        })
+        .select('id,name,template_type')
+        .single();
+    return ChecklistTemplate(
+      id: row['id'] as String,
+      name: row['name'] as String,
+      templateType: row['template_type'] as String? ?? 'user',
+    );
+  }
+
+  @override
+  Future<ChecklistTemplateItem> saveChecklistTemplateItem({
+    required String templateId,
+    required String name,
+    required double sortOrder,
+  }) async {
+    final row = await _client
+        .from('checklist_template_items')
+        .insert({
+          'template_id': templateId,
+          'name': name.trim(),
+          'sort_order': sortOrder,
+        })
+        .select()
+        .single();
+    return ChecklistTemplateItem(
+      id: row['id'] as String,
+      templateId: row['template_id'] as String,
+      name: row['name'] as String,
+      sortOrder: (row['sort_order'] as num?)?.toDouble() ?? 0,
+    );
+  }
+
+  @override
   Future<List<ChecklistItem>> listChecklistItems(String checklistId) async {
     final rows = await _client
         .from('checklist_items')
@@ -907,6 +1058,11 @@ class SupabaseAppRepository implements AppRepository {
               .select()
               .single();
     return ChecklistItem.fromJson(row);
+  }
+
+  @override
+  Future<void> deleteChecklistItem(ChecklistItem item) async {
+    await _client.from('checklist_items').delete().eq('id', item.id);
   }
 
   @override
@@ -979,6 +1135,15 @@ class SupabaseAppRepository implements AppRepository {
         .eq('checklist_id', checklistId)
         .order('sort_order')
         .map((rows) => rows.map(ChecklistItem.fromJson).toList());
+  }
+
+  @override
+  Stream<List<ChecklistMemberCheck>> watchMemberChecks(String checklistItemId) {
+    return _client
+        .from('checklist_member_checks')
+        .stream(primaryKey: ['checklist_item_id', 'user_id'])
+        .eq('checklist_item_id', checklistItemId)
+        .map((rows) => rows.map(ChecklistMemberCheck.fromJson).toList());
   }
 
   String _requireUserId() =>

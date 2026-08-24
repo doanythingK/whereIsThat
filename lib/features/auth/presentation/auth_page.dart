@@ -26,7 +26,10 @@ class _AuthPageState extends ConsumerState<AuthPage> {
     try {
       await ref.read(authActionsProvider).signIn(provider);
       if (mounted && ref.read(appRepositoryProvider).isDemoMode) {
-        context.go('/spaces');
+        final invite = GoRouterState.of(context).uri.queryParameters['invite'];
+        context.go(
+          invite == null ? '/spaces' : '/invite/${Uri.encodeComponent(invite)}',
+        );
       }
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
@@ -60,23 +63,25 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    '가족과 함께 물건의 위치를 찾아보세요.',
+                    strings.loginTagline,
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodyLarge,
                   ),
                   const SizedBox(height: 32),
                   for (final entry in <(SocialProvider, String, IconData)>[
-                    (SocialProvider.kakao, '카카오로 로그인', Icons.chat_bubble),
-                    (SocialProvider.naver, '네이버로 로그인', Icons.language),
-                    (SocialProvider.google, 'Google로 로그인', Icons.g_mobiledata),
-                    (SocialProvider.apple, 'Apple로 로그인', Icons.apple),
+                    (SocialProvider.kakao, 'kakao', Icons.chat_bubble),
+                    (SocialProvider.naver, 'naver', Icons.language),
+                    (SocialProvider.google, 'google', Icons.g_mobiledata),
+                    (SocialProvider.apple, 'apple', Icons.apple),
                   ]) ...[
                     FilledButton.tonalIcon(
                       onPressed: _loading == null
                           ? () => _signIn(entry.$1)
                           : null,
                       icon: Icon(entry.$3),
-                      label: Text(entry.$2),
+                      label: Text(
+                        strings.socialLogin(strings.providerName(entry.$2)),
+                      ),
                     ),
                     const SizedBox(height: 10),
                   ],

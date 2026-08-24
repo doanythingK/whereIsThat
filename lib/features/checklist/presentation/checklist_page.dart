@@ -35,17 +35,21 @@ class _ChecklistPageState extends ConsumerState<ChecklistPage> {
               TextField(
                 controller: controller,
                 autofocus: true,
-                decoration: const InputDecoration(labelText: '이름'),
+                decoration: InputDecoration(
+                  labelText: context.l10n.checklistName,
+                ),
               ),
               if (templates.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String?>(
                   initialValue: templateId,
-                  decoration: const InputDecoration(labelText: '기본 템플릿 (선택)'),
+                  decoration: InputDecoration(
+                    labelText: context.l10n.defaultTemplateOptional,
+                  ),
                   items: [
-                    const DropdownMenuItem<String?>(
+                    DropdownMenuItem<String?>(
                       value: null,
-                      child: Text('직접 만들기'),
+                      child: Text(context.l10n.checklistDirectCreate),
                     ),
                     for (final template in templates)
                       DropdownMenuItem<String?>(
@@ -130,35 +134,77 @@ class _ChecklistPageState extends ConsumerState<ChecklistPage> {
     setState(() => _selectedId = checklist.id);
   }
 
-  Future<void> _addItem(Checklist checklist) async {
+  Future<void> _addItem(Checklist checklist, {ChecklistItem? existing}) async {
     final controller = TextEditingController();
+    controller.text = existing?.name ?? '';
     final linkedItems =
         ref
             .read(itemsProvider((spaceId: widget.spaceId, search: null)))
             .value ??
         const <Item>[];
-    String? linkedItemId;
+    String? linkedItemId = existing?.linkedItemId;
+    var suggestions = <Item>[];
     final result = await showDialog<(String, String?)?>(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: const Text('항목 추가'),
+          title: Text(
+            existing == null
+                ? context.l10n.checklistItemAdd
+                : context.l10n.checklistItemEdit,
+          ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               TextField(
                 controller: controller,
                 autofocus: true,
-                decoration: const InputDecoration(labelText: '준비할 물건'),
+                decoration: InputDecoration(
+                  labelText: context.l10n.prepareItem,
+                ),
+                onChanged: (value) => setDialogState(() {
+                  final query = value.trim().toLowerCase();
+                  suggestions = query.length < 2
+                      ? const <Item>[]
+                      : linkedItems
+                            .where(
+                              (item) => item.name.toLowerCase().contains(query),
+                            )
+                            .take(3)
+                            .toList();
+                  if (suggestions.length == 1 && linkedItemId == null) {
+                    linkedItemId = suggestions.single.id;
+                  }
+                }),
               ),
+              if (suggestions.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Wrap(
+                    spacing: 6,
+                    children: [
+                      for (final suggestion in suggestions)
+                        ActionChip(
+                          label: Text(suggestion.name),
+                          onPressed: () => setDialogState(
+                            () => linkedItemId = suggestion.id,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               DropdownButtonFormField<String?>(
                 initialValue: linkedItemId,
-                decoration: const InputDecoration(labelText: '연결할 물건 (선택)'),
+                decoration: InputDecoration(
+                  labelText: context.l10n.linkedItemOptional,
+                ),
                 items: [
-                  const DropdownMenuItem<String?>(
+                  DropdownMenuItem<String?>(
                     value: null,
-                    child: Text('연결하지 않음'),
+                    child: Text(context.l10n.notLinked),
                   ),
                   for (final item in linkedItems)
                     DropdownMenuItem<String?>(
@@ -189,21 +235,58 @@ class _ChecklistPageState extends ConsumerState<ChecklistPage> {
     );
     controller.dispose();
     if (result == null || result.$1.isEmpty) return;
+    if (!mounted) return;
+    if (existing == null) {
+      final existingItems =
+          ref.read(checklistItemsStreamProvider(checklist.id)).value ??
+          const <ChecklistItem>[];
+      final duplicate = existingItems.any(
+        (item) => item.name.toLowerCase() == result.$1.toLowerCase(),
+      );
+      if (duplicate) {
+        final addAnyway = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text(context.l10n.duplicateChecklistItem),
+            content: Text(context.l10n.duplicateChecklistMessage(result.$1)),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: Text(context.l10n.cancel),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: Text(context.l10n.add),
+              ),
+            ],
+          ),
+        );
+        if (addAnyway != true) return;
+      }
+    }
+    final item =
+        existing?.copyWith(name: result.$1, linkedItemId: result.$2) ??
+        ChecklistItem(
+          id: '',
+          checklistId: checklist.id,
+          name: result.$1,
+          linkedItemId: result.$2,
+          sortOrder:
+              (ref.read(checklistItemsProvider(checklist.id)).value?.length ??
+                      0)
+                  .toDouble(),
+        );
     await ref
         .read(workspaceActionsProvider)
-        .saveChecklistItem(
-          ChecklistItem(
-            id: '',
-            checklistId: checklist.id,
-            name: result.$1,
-            linkedItemId: result.$2,
-            sortOrder:
-                (ref.read(checklistItemsProvider(checklist.id)).value?.length ??
-                        0)
-                    .toDouble(),
-          ),
-          isNew: true,
-        );
+        .saveChecklistItem(item, isNew: existing == null);
+  }
+
+  Future<void> _saveAsTemplate(Checklist checklist) async {
+    await ref.read(workspaceActionsProvider).saveChecklistAsTemplate(checklist);
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(context.l10n.templateSaved)));
+    }
   }
 
   @override
@@ -243,13 +326,18 @@ class _ChecklistPageState extends ConsumerState<ChecklistPage> {
                   .watch(itemsProvider((spaceId: widget.spaceId, search: null)))
                   .value ??
               const <Item>[];
+          final locations =
+              ref.watch(locationsForSpaceProvider(widget.spaceId)).value ??
+              const <Location>[];
           return Column(
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
                 child: DropdownButtonFormField<String>(
                   initialValue: selected.id,
-                  decoration: const InputDecoration(labelText: '목록'),
+                  decoration: InputDecoration(
+                    labelText: context.l10n.checklistList,
+                  ),
                   items: [
                     for (final checklist in values)
                       DropdownMenuItem(
@@ -269,7 +357,9 @@ class _ChecklistPageState extends ConsumerState<ChecklistPage> {
                   children: [
                     Expanded(
                       child: Text(
-                        selected.visibility == 'shared' ? '공간 공유 목록' : '개인 목록',
+                        selected.visibility == 'shared'
+                            ? context.l10n.sharedChecklist
+                            : context.l10n.personalChecklist,
                       ),
                     ),
                     TextButton(
@@ -279,7 +369,16 @@ class _ChecklistPageState extends ConsumerState<ChecklistPage> {
                             selected,
                             complete: !selected.isCompleted,
                           ),
-                      child: Text(selected.isCompleted ? '완료 취소' : '목록 완료'),
+                      child: Text(
+                        selected.isCompleted
+                            ? context.l10n.checklistCompleteCancel
+                            : context.l10n.checklistComplete,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: context.l10n.saveAsTemplate,
+                      onPressed: () => _saveAsTemplate(selected),
+                      icon: const Icon(Icons.bookmark_add_outlined),
                     ),
                     IconButton(
                       onPressed: () => _addItem(selected),
@@ -308,63 +407,89 @@ class _ChecklistPageState extends ConsumerState<ChecklistPage> {
                               (candidate) => candidate.id == item.linkedItemId,
                             )
                             .firstOrNull;
-                        final checks = ref.watch(memberChecksProvider(item.id));
-                        return Card(
-                          child: ExpansionTile(
-                            title: Text(item.name),
-                            subtitle: Text(
-                              linked == null
-                                  ? '연결된 물건 없음'
-                                  : '${linked.name} · ${linked.locationId == null ? context.l10n.unassignedLocation : context.l10n.location}',
-                            ),
-                            trailing: Checkbox(
-                              value: item.isFinalCompleted,
-                              onChanged: (_) => ref
-                                  .read(workspaceActionsProvider)
-                                  .toggleChecklistItem(item),
-                            ),
-                            children: selected.visibility != 'shared'
-                                ? const []
-                                : [
-                                    checks.when(
-                                      loading: () => const Padding(
-                                        padding: EdgeInsets.all(12),
-                                        child: CircularProgressIndicator(),
-                                      ),
-                                      error: (error, stack) => Padding(
-                                        padding: const EdgeInsets.all(12),
-                                        child: Text(error.toString()),
-                                      ),
-                                      data: (checkValues) => Column(
-                                        children: [
-                                          for (final member in members)
-                                            _MemberCheckTile(
-                                              member: member,
-                                              check:
-                                                  checkValues
-                                                      .where(
-                                                        (check) =>
-                                                            check.userId ==
-                                                            member.userId,
+                        final locationName = locations
+                            .where(
+                              (location) => location.id == linked?.locationId,
+                            )
+                            .map((location) => location.name)
+                            .firstOrNull;
+                        final checks = ref.watch(
+                          memberChecksStreamProvider(item.id),
+                        );
+                        return Dismissible(
+                          key: ValueKey(item.id),
+                          direction: DismissDirection.endToStart,
+                          background: Container(
+                            color: Theme.of(context).colorScheme.errorContainer,
+                            alignment: Alignment.centerRight,
+                            padding: const EdgeInsets.only(right: 24),
+                            child: const Icon(Icons.delete_outline),
+                          ),
+                          onDismissed: (_) => ref
+                              .read(workspaceActionsProvider)
+                              .deleteChecklistItem(item),
+                          child: GestureDetector(
+                            onLongPress: () =>
+                                _addItem(selected, existing: item),
+                            child: Card(
+                              child: ExpansionTile(
+                                title: Text(item.name),
+                                subtitle: Text(
+                                  linked == null
+                                      ? context.l10n.noLinkedItem
+                                      : '${linked.name} · ${locationName ?? context.l10n.unassignedLocation}',
+                                ),
+                                trailing: Checkbox(
+                                  value: item.isFinalCompleted,
+                                  onChanged: (_) => ref
+                                      .read(workspaceActionsProvider)
+                                      .toggleChecklistItem(item),
+                                ),
+                                children: selected.visibility != 'shared'
+                                    ? const []
+                                    : [
+                                        checks.when(
+                                          loading: () => const Padding(
+                                            padding: EdgeInsets.all(12),
+                                            child: CircularProgressIndicator(),
+                                          ),
+                                          error: (error, stack) => Padding(
+                                            padding: const EdgeInsets.all(12),
+                                            child: Text(error.toString()),
+                                          ),
+                                          data: (checkValues) => Column(
+                                            children: [
+                                              for (final member in members)
+                                                _MemberCheckTile(
+                                                  member: member,
+                                                  check:
+                                                      checkValues
+                                                          .where(
+                                                            (check) =>
+                                                                check.userId ==
+                                                                member.userId,
+                                                          )
+                                                          .firstOrNull ??
+                                                      ChecklistMemberCheck(
+                                                        checklistItemId:
+                                                            item.id,
+                                                        userId: member.userId,
+                                                      ),
+                                                  enabled:
+                                                      currentUser?.id ==
+                                                      member.userId,
+                                                  onChanged: (check) => ref
+                                                      .read(
+                                                        workspaceActionsProvider,
                                                       )
-                                                      .firstOrNull ??
-                                                  ChecklistMemberCheck(
-                                                    checklistItemId: item.id,
-                                                    userId: member.userId,
-                                                  ),
-                                              enabled:
-                                                  currentUser?.id ==
-                                                  member.userId,
-                                              onChanged: (check) => ref
-                                                  .read(
-                                                    workspaceActionsProvider,
-                                                  )
-                                                  .toggleMemberCheck(check),
-                                            ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
+                                                      .toggleMemberCheck(check),
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                              ),
+                            ),
                           ),
                         );
                       },
@@ -400,7 +525,9 @@ class _MemberCheckTile extends StatelessWidget {
       value: check.isChecked,
       onChanged: enabled ? (_) => onChanged(check) : null,
       title: Text(member.displayName ?? member.userId),
-      subtitle: Text(enabled ? '내 준비 상태' : '멤버 준비 상태'),
+      subtitle: Text(
+        enabled ? context.l10n.myPreparation : context.l10n.memberPreparation,
+      ),
     );
   }
 }

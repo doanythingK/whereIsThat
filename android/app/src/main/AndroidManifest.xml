@@ -1,4 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application
         android:label="엄마 이거 어딨어?"
         android:name="${applicationName}"
@@ -33,6 +34,12 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="whereisthat" android:host="auth-callback" />
                 <data android:scheme="whereisthat" android:host="invite" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="whereisthat" />
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

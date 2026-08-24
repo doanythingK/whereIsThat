@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../../app/localization/app_localizations.dart';
 import '../../../core/data/repository_providers.dart';
+import '../../../core/errors/app_exception.dart';
 import '../../../core/models/app_models.dart';
 
 class ItemEditorSheet extends ConsumerStatefulWidget {
@@ -35,7 +36,9 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
   String? _locationId;
   String _visibility = 'shared';
   String? _categoryId;
+  String? _ownerUserId;
   bool _saving = false;
+  String? _primaryPhotoId;
   final ImagePicker _imagePicker = ImagePicker();
   final List<Uint8List> _pendingPhotos = [];
 
@@ -55,6 +58,12 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
     _locationId = item?.locationId ?? widget.initialLocationId;
     _visibility = item?.visibility ?? 'shared';
     _categoryId = item?.categoryId;
+    _ownerUserId =
+        item?.ownerUserId ?? ref.read(appRepositoryProvider).signedInUser?.id;
+    _primaryPhotoId = item?.photos
+        .where((photo) => photo.isPrimary)
+        .firstOrNull
+        ?.id;
   }
 
   @override
@@ -71,7 +80,9 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
     final name = _nameController.text.trim();
     if (name.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${context.l10n.itemName}을 입력해 주세요.')),
+        SnackBar(
+          content: Text(context.l10n.requiredField(context.l10n.itemName)),
+        ),
       );
       return;
     }
@@ -106,9 +117,7 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
                   ? null
                   : _memoController.text.trim(),
               visibility: _visibility,
-              ownerUserId: _visibility == 'private'
-                  ? ref.read(appRepositoryProvider).signedInUser?.id
-                  : null,
+              ownerUserId: _visibility == 'private' ? _ownerUserId : null,
             );
     try {
       var saved = await ref
@@ -123,8 +132,29 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
       if (mounted) Navigator.of(context).pop();
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(error.toString())));
+        if (error is ConflictException) {
+          final reload = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: Text(context.l10n.conflictTitle),
+              content: Text(context.l10n.conflictBody),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: Text(context.l10n.cancel),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: Text(context.l10n.reloadLatest),
+                ),
+              ],
+            ),
+          );
+          if (reload == true && mounted) Navigator.of(context).pop();
+        } else {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(error.toString())));
+        }
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -135,9 +165,8 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
     final existingCount =
         (widget.item?.photos.length ?? 0) + _pendingPhotos.length;
     if (existingCount >= 3) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('물건 사진은 최대 3장까지 추가할 수 있습니다.')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(context.l10n.photoLimit)));
       return;
     }
     final image = await _imagePicker.pickImage(
@@ -157,11 +186,11 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
     final name = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('카테고리 추가'),
+        title: Text(context.l10n.categoryAdd),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(labelText: '카테고리 이름'),
+          decoration: InputDecoration(labelText: context.l10n.categoryName),
         ),
         actions: [
           TextButton(
@@ -192,16 +221,20 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final plans =
-        ref.watch(floorPlansProvider(widget.spaceId)).value ??
-        const <FloorPlan>[];
-    final firstPlan = plans.firstOrNull;
-    final locations = firstPlan == null
-        ? const AsyncValue<List<Location>>.data([])
-        : ref.watch(locationsProvider(firstPlan.id));
+    final locations = ref.watch(locationsForSpaceProvider(widget.spaceId));
     final categories =
         ref.watch(categoriesProvider(widget.spaceId)).value ??
         const <Category>[];
+    final members =
+        ref.watch(spaceMembersProvider(widget.spaceId)).value ??
+        const <SpaceMember>[];
+    final currentUserId = ref.read(appRepositoryProvider).signedInUser?.id;
+    final currentMember = members
+        .where((member) => member.userId == currentUserId)
+        .firstOrNull;
+    final ownerMembers = currentMember?.role == 'admin'
+        ? members
+        : members.where((member) => member.userId == currentUserId).toList();
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.fromLTRB(
@@ -218,7 +251,9 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
                 children: [
                   Expanded(
                     child: Text(
-                      widget.item == null ? context.l10n.addItem : '물건 수정',
+                      widget.item == null
+                          ? context.l10n.addItem
+                          : context.l10n.itemEdit,
                       style: Theme.of(context).textTheme.titleLarge
                           ?.copyWith(fontWeight: FontWeight.w700),
                     ),
@@ -277,11 +312,13 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
                 initialValue: _categoryId,
-                decoration: const InputDecoration(labelText: '카테고리 (선택)'),
+                decoration: InputDecoration(
+                  labelText: context.l10n.categoryOptional,
+                ),
                 items: [
                   DropdownMenuItem<String?>(
                     value: null,
-                    child: const Text('없음'),
+                    child: Text(context.l10n.none),
                   ),
                   ...categories.map(
                     (category) => DropdownMenuItem<String?>(
@@ -297,7 +334,7 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
                 child: TextButton.icon(
                   onPressed: () => _createCategory(categories),
                   icon: const Icon(Icons.add, size: 18),
-                  label: const Text('카테고리 추가'),
+                  label: Text(context.l10n.categoryAdd),
                 ),
               ),
               const SizedBox(height: 12),
@@ -313,13 +350,39 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
                   ),
                 ],
                 selected: {_visibility},
-                onSelectionChanged: (value) =>
-                    setState(() => _visibility = value.first),
+                onSelectionChanged: (value) => setState(() {
+                  _visibility = value.first;
+                  if (_visibility == 'private' && _ownerUserId == null) {
+                    _ownerUserId = currentUserId;
+                  }
+                }),
               ),
+              if (_visibility == 'private' && ownerMembers.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue:
+                      ownerMembers.any(
+                        (member) => member.userId == _ownerUserId,
+                      )
+                      ? _ownerUserId
+                      : currentUserId,
+                  decoration: InputDecoration(labelText: context.l10n.owner),
+                  items: [
+                    for (final member in ownerMembers)
+                      DropdownMenuItem(
+                        value: member.userId,
+                        child: Text(member.displayName ?? member.userId),
+                      ),
+                  ],
+                  onChanged: (value) => setState(() => _ownerUserId = value),
+                ),
+              ],
               const SizedBox(height: 12),
               TextField(
                 controller: _detailController,
-                decoration: InputDecoration(labelText: '상세 위치 (선택)'),
+                decoration: InputDecoration(
+                  labelText: context.l10n.detailLocationOptional,
+                ),
               ),
               const SizedBox(height: 12),
               _PhotoSection(
@@ -335,6 +398,14 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
                       .read(workspaceActionsProvider)
                       .deleteItemPhoto(widget.item!, photo);
                   if (mounted) setState(() {});
+                },
+                primaryPhotoId: _primaryPhotoId,
+                onSetPrimary: (photo) async {
+                  if (widget.item == null) return;
+                  await ref
+                      .read(workspaceActionsProvider)
+                      .setPrimaryItemPhoto(widget.item!, photo);
+                  if (mounted) setState(() => _primaryPhotoId = photo.id);
                 },
               ),
               const SizedBox(height: 12),
@@ -372,6 +443,8 @@ class _PhotoSection extends StatelessWidget {
     required this.onPickGallery,
     required this.onRemovePending,
     required this.onDeleteExisting,
+    required this.primaryPhotoId,
+    required this.onSetPrimary,
   });
 
   final Item? item;
@@ -380,6 +453,8 @@ class _PhotoSection extends StatelessWidget {
   final VoidCallback onPickGallery;
   final ValueChanged<int> onRemovePending;
   final ValueChanged<ItemPhoto> onDeleteExisting;
+  final String? primaryPhotoId;
+  final ValueChanged<ItemPhoto> onSetPrimary;
 
   @override
   Widget build(BuildContext context) {
@@ -392,25 +467,25 @@ class _PhotoSection extends StatelessWidget {
           children: [
             Expanded(
               child: Text(
-                '사진 ($total/3)',
+                context.l10n.photoCount(total),
                 style: Theme.of(context).textTheme.titleMedium,
               ),
             ),
             IconButton(
               onPressed: total >= 3 ? null : onPickCamera,
-              tooltip: '카메라',
+              tooltip: context.l10n.camera,
               icon: const Icon(Icons.camera_alt_outlined),
             ),
             IconButton(
               onPressed: total >= 3 ? null : onPickGallery,
-              tooltip: '갤러리',
+              tooltip: context.l10n.gallery,
               icon: const Icon(Icons.photo_library_outlined),
             ),
           ],
         ),
         if (total == 0)
           Text(
-            '필요할 때 사진을 최대 3장까지 추가할 수 있어요.',
+            context.l10n.photoHint,
             style: Theme.of(context).textTheme.bodySmall,
           ),
         if (total > 0)
@@ -423,6 +498,10 @@ class _PhotoSection extends StatelessWidget {
                   _ExistingPhotoTile(
                     photo: photo,
                     onDelete: () => onDeleteExisting(photo),
+                    isPrimary:
+                        primaryPhotoId == photo.id ||
+                        (primaryPhotoId == null && photo.isPrimary),
+                    onSetPrimary: () => onSetPrimary(photo),
                   ),
                 for (var index = 0; index < pendingPhotos.length; index++)
                   Stack(
@@ -459,10 +538,17 @@ class _PhotoSection extends StatelessWidget {
 }
 
 class _ExistingPhotoTile extends ConsumerWidget {
-  const _ExistingPhotoTile({required this.photo, required this.onDelete});
+  const _ExistingPhotoTile({
+    required this.photo,
+    required this.onDelete,
+    required this.isPrimary,
+    required this.onSetPrimary,
+  });
 
   final ItemPhoto photo;
   final VoidCallback onDelete;
+  final bool isPrimary;
+  final VoidCallback onSetPrimary;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -486,6 +572,15 @@ class _ExistingPhotoTile extends ConsumerWidget {
                           const _PhotoPlaceholder(),
                     )
                   : const _PhotoPlaceholder(),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            top: 0,
+            child: IconButton.filledTonal(
+              onPressed: onSetPrimary,
+              icon: Icon(isPrimary ? Icons.star : Icons.star_border, size: 16),
+              visualDensity: VisualDensity.compact,
             ),
           ),
           Positioned(
