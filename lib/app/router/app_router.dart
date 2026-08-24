@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -15,12 +16,21 @@ import '../../features/space/presentation/more_page.dart';
 import '../../features/shopping/presentation/shopping_page.dart';
 
 final appRouterProvider = Provider<GoRouter>((ref) {
-  final repository = ref.watch(appRepositoryProvider);
-  final authState = ref.watch(authStateProvider);
-  final deletionState = ref.watch(accountDeletionPendingProvider);
+  final repository = ref.read(appRepositoryProvider);
+  final refresh = _RouterRefreshNotifier();
+  ref.listen(authStateProvider, (previous, next) => refresh.refresh());
+  ref.listen(
+    accountDeletionPendingProvider,
+    (previous, next) => refresh.refresh(),
+  );
+  ref.onDispose(refresh.dispose);
+
   return GoRouter(
     initialLocation: repository.isDemoMode ? '/spaces' : '/auth',
+    refreshListenable: refresh,
     redirect: (context, state) {
+      final authState = ref.read(authStateProvider);
+      final deletionState = ref.read(accountDeletionPendingProvider);
       if (repository.isDemoMode || authState.isLoading) return null;
       final signedIn = authState.value != null;
       final onAuth = state.uri.path == '/auth';
@@ -98,3 +108,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     ],
   );
 });
+
+class _RouterRefreshNotifier extends ChangeNotifier {
+  void refresh() => notifyListeners();
+}

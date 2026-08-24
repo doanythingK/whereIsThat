@@ -18,4 +18,24 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('우리집'), findsOneWidget);
   });
+
+  testWidgets(
+    'demo mode can navigate into a space',
+    (WidgetTester tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            appRepositoryProvider.overrideWithValue(DemoAppRepository()),
+          ],
+          child: const WhereIsThatApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('우리집'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('물건 추가'), findsWidgets);
+    },
+  );
 }
