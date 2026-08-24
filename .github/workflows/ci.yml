@@ -1,6 +1,7 @@
 name: Flutter CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [dev, main]
   pull_request:
@@ -56,3 +57,5 @@ jobs:
         with:
           name: where-is-that-debug-apk
           path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14

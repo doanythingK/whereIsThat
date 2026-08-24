@@ -72,6 +72,13 @@ flutter build apk --debug
 
 GitHub Actions가 `dev`와 `main`의 분석·테스트·Android debug build를 실행합니다. iOS archive/build는 macOS + Xcode + CocoaPods 환경에서 실행합니다.
 
+## 휴대폰에서 APK 받기
+
+1. GitHub 저장소의 **Actions → Flutter CI**로 이동합니다.
+2. **Run workflow**를 누르고 브랜치 `dev`를 선택한 뒤 실행합니다.
+3. 실행이 끝나면 해당 실행 화면 하단 **Artifacts → where-is-that-debug-apk**를 눌러 다운로드합니다.
+4. 휴대폰에서 ZIP 압축을 풀고 `app-debug.apk`를 설치합니다. Android 설정에서 브라우저/파일 앱의 알 수 없는 앱 설치를 허용해야 할 수 있습니다.
+
 ## 현재 검증 범위와 제약
 
 - 데모 저장소에서 공간/평면도/위치/물건/사진 선택/검색/장보기/체크리스트 주요 흐름을 실행할 수 있습니다.
