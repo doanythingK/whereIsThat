@@ -35,6 +35,6 @@ void main() {
     await tester.tap(find.text('우리집'));
     await tester.pumpAndSettle();
 
-    expect(find.text('물건 추가'), findsWidgets);
+    expect(find.text('물건 등록'), findsWidgets);
   });
 }
