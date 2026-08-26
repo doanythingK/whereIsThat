@@ -36,6 +36,8 @@ class AppServices {
   final bool firebaseReady;
   final bool adsEnabled;
   final AdPolicyService adPolicy;
+  StreamSubscription<String>? _tokenRefreshSubscription;
+  Future<void>? _deviceSyncInFlight;
 
   static Future<AppServices> initialize(AppConfig config) async {
     var firebaseReady = false;
@@ -77,9 +79,26 @@ class AppServices {
     return services;
   }
 
-  Future<void> syncDevice(AppRepository repository) async {
-    if (!firebaseReady || kIsWeb) return;
+  Future<void> syncDevice(AppRepository repository) {
+    if (!firebaseReady || kIsWeb) return Future<void>.value();
+    final pending = _deviceSyncInFlight;
+    if (pending != null) return pending;
+    final operation = _syncDevice(repository);
+    _deviceSyncInFlight = operation;
+    return operation;
+  }
+
+  Future<void> resetDeviceSync() async {
+    final subscription = _tokenRefreshSubscription;
+    _tokenRefreshSubscription = null;
+    _deviceSyncInFlight = null;
+    await subscription?.cancel();
+  }
+
+  Future<void> _syncDevice(AppRepository repository) async {
     try {
+      final userId = repository.signedInUser?.id;
+      if (userId == null) return;
       final settings = await FirebaseMessaging.instance.requestPermission(
         alert: true,
         badge: true,
@@ -88,24 +107,50 @@ class AppServices {
       if (settings.authorizationStatus == AuthorizationStatus.denied) return;
       final token = await FirebaseMessaging.instance.getToken();
       if (token == null || token.isEmpty) return;
+      if (repository.signedInUser?.id != userId) return;
       const appVersion = String.fromEnvironment(
         'APP_VERSION',
         defaultValue: '1.0.0',
       );
-      await repository.registerDevice(
-        platform: Platform.isIOS ? 'ios' : 'android',
+      final platform = Platform.isIOS ? 'ios' : 'android';
+      await _registerDeviceToken(
+        repository,
+        platform: platform,
         token: token,
         appVersion: appVersion,
       );
-      FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
-        unawaited(
-          repository.registerDevice(
-            platform: Platform.isIOS ? 'ios' : 'android',
-            token: newToken,
-            appVersion: appVersion,
-          ),
-        );
-      });
+      if (repository.signedInUser?.id != userId) return;
+      _tokenRefreshSubscription ??= FirebaseMessaging.instance.onTokenRefresh
+          .listen((newToken) {
+            if (repository.signedInUser?.id != userId) return;
+            unawaited(
+              _registerDeviceToken(
+                repository,
+                platform: platform,
+                token: newToken,
+                appVersion: appVersion,
+              ),
+            );
+          });
+    } catch (error, stack) {
+      await recordError(error, stack);
+    } finally {
+      _deviceSyncInFlight = null;
+    }
+  }
+
+  Future<void> _registerDeviceToken(
+    AppRepository repository, {
+    required String platform,
+    required String token,
+    required String appVersion,
+  }) async {
+    try {
+      await repository.registerDevice(
+        platform: platform,
+        token: token,
+        appVersion: appVersion,
+      );
     } catch (error, stack) {
       await recordError(error, stack);
     }

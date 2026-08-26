@@ -106,141 +106,187 @@ class _ChecklistPageState extends ConsumerState<ChecklistPage> {
     );
     controller.dispose();
     if (result == null || result.$1.isEmpty) return;
-    final checklist = await ref
-        .read(workspaceActionsProvider)
-        .createChecklist(
-          spaceId: result.$2 == 'shared' ? widget.spaceId : null,
-          name: result.$1,
-          visibility: result.$2,
+    if (!mounted) return;
+    try {
+      final checklist = await ref
+          .read(workspaceActionsProvider)
+          .createChecklist(
+            spaceId: result.$2 == 'shared' ? widget.spaceId : null,
+            name: result.$1,
+            visibility: result.$2,
+          );
+      if (!mounted) return;
+      if (result.$3 != null) {
+        final templateItems = await ref.read(
+          checklistTemplateItemsProvider(result.$3!).future,
         );
-    if (result.$3 != null) {
-      final templateItems = await ref.read(
-        checklistTemplateItemsProvider(result.$3!).future,
-      );
-      for (final templateItem in templateItems) {
-        await ref
-            .read(workspaceActionsProvider)
-            .saveChecklistItem(
-              ChecklistItem(
-                id: '',
-                checklistId: checklist.id,
-                name: templateItem.name,
-                sortOrder: templateItem.sortOrder,
-              ),
-              isNew: true,
-            );
+        for (final templateItem in templateItems) {
+          if (!mounted) return;
+          await ref
+              .read(workspaceActionsProvider)
+              .saveChecklistItem(
+                ChecklistItem(
+                  id: '',
+                  checklistId: checklist.id,
+                  name: templateItem.name,
+                  sortOrder: templateItem.sortOrder,
+                ),
+                isNew: true,
+              );
+        }
+      }
+      if (!mounted) return;
+      ref.invalidate(checklistsProvider(widget.spaceId));
+      setState(() => _selectedId = checklist.id);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.toString())));
       }
     }
-    setState(() => _selectedId = checklist.id);
+  }
+
+  Future<void> _toggleChecklistCompletion(Checklist checklist) async {
+    try {
+      await ref
+          .read(workspaceActionsProvider)
+          .completeChecklist(checklist, complete: !checklist.isCompleted);
+      if (mounted) ref.invalidate(checklistsProvider(widget.spaceId));
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    }
   }
 
   Future<void> _addItem(Checklist checklist, {ChecklistItem? existing}) async {
     final controller = TextEditingController();
     controller.text = existing?.name ?? '';
-    final linkedItems =
-        ref
-            .read(itemsProvider((spaceId: widget.spaceId, search: null)))
-            .value ??
-        const <Item>[];
-    String? linkedItemId = existing?.linkedItemId;
+    final linkedItemsState = ref.read(
+      itemsProvider((spaceId: widget.spaceId, search: null)),
+    );
+    final linkedItems = linkedItemsState.value ?? const <Item>[];
+    final existingLinkedItemId = existing?.linkedItemId;
+    String? linkedItemId = linkedItemsState.hasValue &&
+            existingLinkedItemId != null &&
+            !linkedItems.any((item) => item.id == existingLinkedItemId)
+        ? null
+        : existingLinkedItemId;
     var suggestions = <Item>[];
     final result = await showDialog<(String, String?)?>(
       context: context,
       builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: Text(
-            existing == null
-                ? context.l10n.checklistItemAdd
-                : context.l10n.checklistItemEdit,
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: controller,
-                autofocus: true,
-                decoration: InputDecoration(
-                  labelText: context.l10n.prepareItem,
-                ),
-                onChanged: (value) => setDialogState(() {
-                  final query = value.trim().toLowerCase();
-                  suggestions = query.length < 2
-                      ? const <Item>[]
-                      : linkedItems
-                            .where(
-                              (item) => item.name.toLowerCase().contains(query),
-                            )
-                            .take(3)
-                            .toList();
-                  if (suggestions.length == 1 && linkedItemId == null) {
-                    linkedItemId = suggestions.single.id;
-                  }
-                }),
-              ),
-              if (suggestions.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Wrap(
-                    spacing: 6,
-                    children: [
-                      for (final suggestion in suggestions)
-                        ActionChip(
-                          label: Text(suggestion.name),
-                          onPressed: () => setDialogState(
-                            () => linkedItemId = suggestion.id,
-                          ),
-                        ),
-                    ],
+        builder: (context, setDialogState) {
+          final selectedLinkedItemId = linkedItems.any(
+            (item) => item.id == linkedItemId,
+          )
+              ? linkedItemId
+              : null;
+          return AlertDialog(
+            title: Text(
+              existing == null
+                  ? context.l10n.checklistItemAdd
+                  : context.l10n.checklistItemEdit,
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    labelText: context.l10n.prepareItem,
                   ),
+                  onChanged: (value) => setDialogState(() {
+                    final query = value.trim().toLowerCase();
+                    suggestions = query.length < 2
+                        ? const <Item>[]
+                        : linkedItems
+                              .where(
+                                (item) =>
+                                    item.name.toLowerCase().contains(query),
+                              )
+                              .take(3)
+                              .toList();
+                    if (suggestions.length == 1 && linkedItemId == null) {
+                      linkedItemId = suggestions.single.id;
+                    }
+                  }),
+                ),
+                if (suggestions.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Wrap(
+                      spacing: 6,
+                      children: [
+                        for (final suggestion in suggestions)
+                          ActionChip(
+                            label: Text(suggestion.name),
+                            onPressed: () => setDialogState(
+                              () => linkedItemId = suggestion.id,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String?>(
+                  initialValue: selectedLinkedItemId,
+                  decoration: InputDecoration(
+                    labelText: context.l10n.linkedItemOptional,
+                  ),
+                  items: [
+                    DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text(context.l10n.notLinked),
+                    ),
+                    for (final item in linkedItems)
+                      DropdownMenuItem<String?>(
+                        value: item.id,
+                        child: Text(item.name),
+                      ),
+                  ],
+                  onChanged: (value) =>
+                      setDialogState(() => linkedItemId = value),
                 ),
               ],
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String?>(
-                initialValue: linkedItemId,
-                decoration: InputDecoration(
-                  labelText: context.l10n.linkedItemOptional,
-                ),
-                items: [
-                  DropdownMenuItem<String?>(
-                    value: null,
-                    child: Text(context.l10n.notLinked),
-                  ),
-                  for (final item in linkedItems)
-                    DropdownMenuItem<String?>(
-                      value: item.id,
-                      child: Text(item.name),
-                    ),
-                ],
-                onChanged: (value) =>
-                    setDialogState(() => linkedItemId = value),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(context.l10n.cancel),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, (
+                  controller.text.trim(),
+                  linkedItemId,
+                )),
+                child: Text(context.l10n.add),
               ),
             ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text(context.l10n.cancel),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, (
-                controller.text.trim(),
-                linkedItemId,
-              )),
-              child: Text(context.l10n.add),
-            ),
-          ],
-        ),
+          );
+        },
       ),
     );
     controller.dispose();
     if (result == null || result.$1.isEmpty) return;
     if (!mounted) return;
+    late List<ChecklistItem> currentItems;
+    try {
+      currentItems = await ref.read(checklistItemsProvider(checklist.id).future);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+      return;
+    }
+    if (!mounted) return;
     if (existing == null) {
-      final existingItems =
-          ref.read(checklistItemsStreamProvider(checklist.id)).value ??
-          const <ChecklistItem>[];
-      final duplicate = existingItems.any(
+      final duplicate = currentItems.any(
         (item) => item.name.toLowerCase() == result.$1.toLowerCase(),
       );
       if (duplicate) {
@@ -271,21 +317,69 @@ class _ChecklistPageState extends ConsumerState<ChecklistPage> {
           checklistId: checklist.id,
           name: result.$1,
           linkedItemId: result.$2,
-          sortOrder:
-              (ref.read(checklistItemsProvider(checklist.id)).value?.length ??
-                      0)
-                  .toDouble(),
+          sortOrder: currentItems.length.toDouble(),
         );
-    await ref
-        .read(workspaceActionsProvider)
-        .saveChecklistItem(item, isNew: existing == null);
+    try {
+      await ref
+          .read(workspaceActionsProvider)
+          .saveChecklistItem(item, isNew: existing == null);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    }
   }
 
   Future<void> _saveAsTemplate(Checklist checklist) async {
-    await ref.read(workspaceActionsProvider).saveChecklistAsTemplate(checklist);
-    if (mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(context.l10n.templateSaved)));
+    try {
+      await ref
+          .read(workspaceActionsProvider)
+          .saveChecklistAsTemplate(checklist);
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(context.l10n.templateSaved)));
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    }
+  }
+
+  Future<void> _toggleChecklistItem(ChecklistItem item) async {
+    try {
+      await ref.read(workspaceActionsProvider).toggleChecklistItem(item);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    }
+  }
+
+  Future<void> _deleteChecklistItem(ChecklistItem item) async {
+    try {
+      await ref.read(workspaceActionsProvider).deleteChecklistItem(item);
+    } catch (error) {
+      if (mounted) {
+        ref.invalidate(checklistItemsStreamProvider(item.checklistId));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    }
+  }
+
+  Future<void> _toggleMemberCheck(ChecklistMemberCheck check) async {
+    try {
+      await ref.read(workspaceActionsProvider).toggleMemberCheck(check);
+    } catch (error) {
+      if (mounted) {
+        ref.invalidate(memberChecksStreamProvider(check.checklistItemId));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.toString())));
+      }
     }
   }
 
@@ -363,12 +457,7 @@ class _ChecklistPageState extends ConsumerState<ChecklistPage> {
                       ),
                     ),
                     TextButton(
-                      onPressed: () => ref
-                          .read(workspaceActionsProvider)
-                          .completeChecklist(
-                            selected,
-                            complete: !selected.isCompleted,
-                          ),
+                      onPressed: () => _toggleChecklistCompletion(selected),
                       child: Text(
                         selected.isCompleted
                             ? context.l10n.checklistCompleteCancel
@@ -425,9 +514,7 @@ class _ChecklistPageState extends ConsumerState<ChecklistPage> {
                             padding: const EdgeInsets.only(right: 24),
                             child: const Icon(Icons.delete_outline),
                           ),
-                          onDismissed: (_) => ref
-                              .read(workspaceActionsProvider)
-                              .deleteChecklistItem(item),
+                          onDismissed: (_) => _deleteChecklistItem(item),
                           child: GestureDetector(
                             onLongPress: () =>
                                 _addItem(selected, existing: item),
@@ -441,9 +528,7 @@ class _ChecklistPageState extends ConsumerState<ChecklistPage> {
                                 ),
                                 trailing: Checkbox(
                                   value: item.isFinalCompleted,
-                                  onChanged: (_) => ref
-                                      .read(workspaceActionsProvider)
-                                      .toggleChecklistItem(item),
+                                  onChanged: (_) => _toggleChecklistItem(item),
                                 ),
                                 children: selected.visibility != 'shared'
                                     ? const []
@@ -478,11 +563,8 @@ class _ChecklistPageState extends ConsumerState<ChecklistPage> {
                                                   enabled:
                                                       currentUser?.id ==
                                                       member.userId,
-                                                  onChanged: (check) => ref
-                                                      .read(
-                                                        workspaceActionsProvider,
-                                                      )
-                                                      .toggleMemberCheck(check),
+                                                  onChanged: (check) =>
+                                                      _toggleMemberCheck(check),
                                                 ),
                                             ],
                                           ),

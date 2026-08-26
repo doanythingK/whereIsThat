@@ -185,18 +185,19 @@ class SupabaseAppRepository implements AppRepository {
         .order('updated_at', ascending: false);
     final spaces = <Space>[];
     final lastAccessed = <String, DateTime>{};
+    final currentUserId = _requireUserId();
     for (final raw in (rows as List)) {
       final row = Map<String, dynamic>.from(raw as Map);
       final members = await _client
           .from('space_members')
-          .select('last_accessed_at')
+          .select('user_id,last_accessed_at')
           .eq('space_id', row['id'] as String)
-          .eq('user_id', _requireUserId())
           .isFilter('deleted_at', null);
       final memberRows = members as List;
       for (final rawMember in memberRows) {
-        final accessed = (rawMember as Map)['last_accessed_at'];
-        if (accessed != null) {
+        final member = rawMember as Map;
+        final accessed = member['last_accessed_at'];
+        if (member['user_id'] == currentUserId && accessed != null) {
           lastAccessed[row['id'] as String] = DateTime.parse(
             accessed.toString(),
           );
@@ -245,7 +246,7 @@ class SupabaseAppRepository implements AppRepository {
 
   @override
   Future<void> updateSpace(Space space) async {
-    await _client
+    final row = await _client
         .from('spaces')
         .update({
           'name': space.name,
@@ -253,13 +254,16 @@ class SupabaseAppRepository implements AppRepository {
           'icon_color': space.iconColor,
           'updated_at': _now().toIso8601String(),
         })
-        .eq('id', space.id);
+        .eq('id', space.id)
+        .select('id')
+        .maybeSingle();
+    if (row == null) throw const ConflictException();
   }
 
   @override
   Future<void> softDeleteSpace(Space space) async {
     final now = _now();
-    await _client
+    final row = await _client
         .from('spaces')
         .update({
           'deleted_at': now.toIso8601String(),
@@ -267,7 +271,11 @@ class SupabaseAppRepository implements AppRepository {
               .add(const Duration(days: 30))
               .toIso8601String(),
         })
-        .eq('id', space.id);
+        .eq('id', space.id)
+        .isFilter('deleted_at', null)
+        .select('id')
+        .maybeSingle();
+    if (row == null) throw const ConflictException();
   }
 
   @override
@@ -287,10 +295,14 @@ class SupabaseAppRepository implements AppRepository {
 
   @override
   Future<void> updateMemberRole(SpaceMember member, String role) async {
-    await _client
+    final row = await _client
         .from('space_members')
         .update({'role': role})
-        .eq('id', member.id);
+        .eq('id', member.id)
+        .isFilter('deleted_at', null)
+        .select('id')
+        .maybeSingle();
+    if (row == null) throw const ConflictException();
   }
 
   @override
@@ -298,11 +310,15 @@ class SupabaseAppRepository implements AppRepository {
     SpaceMember member,
     String displayName,
   ) async {
-    await _client
+    final row = await _client
         .from('space_members')
         .update({'display_name': displayName.trim()})
         .eq('id', member.id)
-        .eq('user_id', _requireUserId());
+        .eq('user_id', _requireUserId())
+        .isFilter('deleted_at', null)
+        .select('id')
+        .maybeSingle();
+    if (row == null) throw const ConflictException();
   }
 
   @override
@@ -335,10 +351,14 @@ class SupabaseAppRepository implements AppRepository {
 
   @override
   Future<void> revokeInvite(SpaceInvite invite) async {
-    await _client
+    final row = await _client
         .from('space_invites')
         .update({'revoked_at': _now().toIso8601String()})
-        .eq('id', invite.id);
+        .eq('id', invite.id)
+        .isFilter('revoked_at', null)
+        .select('id')
+        .maybeSingle();
+    if (row == null) throw const ConflictException();
   }
 
   @override
@@ -359,11 +379,15 @@ class SupabaseAppRepository implements AppRepository {
 
   @override
   Future<void> updateLastAccessed(String spaceId) async {
-    await _client
+    final row = await _client
         .from('space_members')
         .update({'last_accessed_at': _now().toIso8601String()})
         .eq('space_id', spaceId)
-        .eq('user_id', _requireUserId());
+        .eq('user_id', _requireUserId())
+        .isFilter('deleted_at', null)
+        .select('id')
+        .maybeSingle();
+    if (row == null) throw const ConflictException();
   }
 
   @override
@@ -707,11 +731,12 @@ class SupabaseAppRepository implements AppRepository {
 
   @override
   Future<void> softDeleteItem(Item item) async {
+    final now = _now();
     final row = await _client
         .from('items')
         .update({
-          'deleted_at': _now().toIso8601String(),
-          'delete_purge_at': _now()
+          'deleted_at': now.toIso8601String(),
+          'delete_purge_at': now
               .add(const Duration(days: 30))
               .toIso8601String(),
           'version': item.version + 1,
@@ -738,10 +763,10 @@ class SupabaseAppRepository implements AppRepository {
           .eq('item_id', item.id)
           .eq('user_id', userId);
     } else {
-      await _client.from('item_favorites').insert({
+      await _client.from('item_favorites').upsert({
         'item_id': item.id,
         'user_id': userId,
-      });
+      }, onConflict: 'user_id,item_id');
     }
   }
 
@@ -751,11 +776,41 @@ class SupabaseAppRepository implements AppRepository {
     required String targetSpaceId,
     String? targetLocationId,
   }) async {
+    final requestedLocationId = targetLocationId;
+    if (requestedLocationId != null) {
+      final location = await _client
+          .from('locations')
+          .select('id')
+          .eq('id', requestedLocationId)
+          .eq('space_id', targetSpaceId)
+          .isFilter('deleted_at', null)
+          .maybeSingle();
+      if (location == null) {
+        throw const AppException('이동할 위치를 찾을 수 없습니다.');
+      }
+    }
+    String? targetCategoryId = item.categoryId;
+    if (targetCategoryId != null) {
+      final category = await _client
+          .from('categories')
+          .select('id,space_id')
+          .eq('id', targetCategoryId)
+          .isFilter('deleted_at', null)
+          .maybeSingle();
+      final categorySpaceId = category?['space_id'] as String?;
+      if (category == null ||
+          (categorySpaceId != null && categorySpaceId != targetSpaceId)) {
+        // System categories are global and can travel with the item. A
+        // space-specific category has no valid meaning in the destination.
+        targetCategoryId = null;
+      }
+    }
     final row = await _client
         .from('items')
         .update({
           'space_id': targetSpaceId,
-          'location_id': targetLocationId,
+          'location_id': requestedLocationId,
+          'category_id': targetCategoryId,
           'version': item.version + 1,
         })
         .eq('id', item.id)
@@ -787,7 +842,17 @@ class SupabaseAppRepository implements AppRepository {
     required Uint8List bytes,
     required String extension,
   }) async {
-    if (item.photos.length >= 3) {
+    // Refresh the server-side count/order so a stale editor state cannot
+    // bypass the cap or accidentally create a second primary photo.
+    final photoRows = await _client
+        .from('item_photos')
+        .select('id,is_primary,sort_order')
+        .eq('item_id', item.id)
+        .order('sort_order');
+    final existingPhotos = (photoRows as List)
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .toList();
+    if (existingPhotos.length >= 3) {
       throw const AppException('물건 사진은 최대 3장까지 추가할 수 있습니다.');
     }
     final path = '${_requireUserId()}/${item.id}/${_uuid.v4()}.$extension';
@@ -801,23 +866,55 @@ class SupabaseAppRepository implements AppRepository {
             upsert: false,
           ),
         );
-    final row = await _client
-        .from('item_photos')
-        .insert({
-          'item_id': item.id,
-          'storage_path': path,
-          'is_primary': item.photos.isEmpty,
-          'sort_order': item.photos.length,
-        })
-        .select()
-        .single();
+    Map<String, dynamic> row;
+    try {
+      row = await _client
+          .from('item_photos')
+          .insert({
+            'item_id': item.id,
+            'storage_path': path,
+            'is_primary': !existingPhotos.any(
+              (photo) => photo['is_primary'] == true,
+            ),
+            'sort_order': existingPhotos.length,
+          })
+          .select()
+          .single();
+    } catch (_) {
+      // Storage and the relational row are separate operations.  Do not
+      // leave an inaccessible file behind when the row insert is rejected.
+      try {
+        await _client.storage.from('item-photos').remove([path]);
+      } catch (_) {
+        // Preserve the original database error; the file can be cleaned by
+        // the storage retention sweep if the best-effort cleanup fails.
+      }
+      rethrow;
+    }
     return ItemPhoto.fromJson(row);
   }
 
   @override
   Future<void> deleteItemPhoto(Item item, ItemPhoto photo) async {
-    await _client.storage.from('item-photos').remove([photo.storagePath]);
-    await _client.from('item_photos').delete().eq('id', photo.id);
+    final row = await _client
+        .from('item_photos')
+        .select('id,storage_path')
+        .eq('id', photo.id)
+        .eq('item_id', item.id)
+        .maybeSingle();
+    if (row == null) {
+      throw const AppException('사진을 찾을 수 없습니다.');
+    }
+    final storagePath = row['storage_path'] as String;
+    await _client.storage.from('item-photos').remove([storagePath]);
+    final deleted = await _client
+        .from('item_photos')
+        .delete()
+        .eq('id', photo.id)
+        .eq('item_id', item.id)
+        .select('id')
+        .maybeSingle();
+    if (deleted == null) throw const ConflictException();
   }
 
   @override
@@ -883,7 +980,7 @@ class SupabaseAppRepository implements AppRepository {
 
   @override
   Future<void> updateShoppingItem(ShoppingItem item) async {
-    await _client
+    final row = await _client
         .from('shopping_items')
         .update({
           'name': item.name,
@@ -893,14 +990,24 @@ class SupabaseAppRepository implements AppRepository {
           'completed_at': item.completedAt?.toIso8601String(),
           'sort_order': item.sortOrder,
         })
-        .eq('id', item.id);
+        .eq('id', item.id)
+        .isFilter('deleted_at', null)
+        .select('id')
+        .maybeSingle();
+    if (row == null) throw const ConflictException();
   }
 
   @override
-  Future<void> deleteShoppingItem(ShoppingItem item) async => _client
-      .from('shopping_items')
-      .update({'deleted_at': _now().toIso8601String()})
-      .eq('id', item.id);
+  Future<void> deleteShoppingItem(ShoppingItem item) async {
+    final row = await _client
+        .from('shopping_items')
+        .update({'deleted_at': _now().toIso8601String()})
+        .eq('id', item.id)
+        .isFilter('deleted_at', null)
+        .select('id')
+        .maybeSingle();
+    if (row == null) throw const ConflictException();
+  }
 
   @override
   Future<List<Checklist>> listChecklists({String? spaceId}) async {
@@ -1062,20 +1169,29 @@ class SupabaseAppRepository implements AppRepository {
 
   @override
   Future<void> deleteChecklistItem(ChecklistItem item) async {
-    await _client.from('checklist_items').delete().eq('id', item.id);
+    final row = await _client
+        .from('checklist_items')
+        .delete()
+        .eq('id', item.id)
+        .select('id')
+        .maybeSingle();
+    if (row == null) throw const ConflictException();
   }
 
   @override
   Future<void> toggleChecklistItem(ChecklistItem item) async {
     final complete = !item.isFinalCompleted;
-    await _client
+    final row = await _client
         .from('checklist_items')
         .update({
           'is_final_completed': complete,
           'final_completed_by': complete ? _requireUserId() : null,
           'final_completed_at': complete ? _now().toIso8601String() : null,
         })
-        .eq('id', item.id);
+        .eq('id', item.id)
+        .select('id')
+        .maybeSingle();
+    if (row == null) throw const ConflictException();
   }
 
   @override
@@ -1106,14 +1222,17 @@ class SupabaseAppRepository implements AppRepository {
     Checklist checklist, {
     required bool complete,
   }) async {
-    await _client
+    final row = await _client
         .from('checklists')
         .update({
           'is_completed': complete,
           'completed_by': complete ? _requireUserId() : null,
           'completed_at': complete ? _now().toIso8601String() : null,
         })
-        .eq('id', checklist.id);
+        .eq('id', checklist.id)
+        .select('id')
+        .maybeSingle();
+    if (row == null) throw const ConflictException();
   }
 
   @override

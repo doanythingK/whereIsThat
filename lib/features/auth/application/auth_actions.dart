@@ -23,6 +23,7 @@ class AuthActions {
 
   Future<void> signOut() async {
     await ref.read(appRepositoryProvider).signOut();
+    await AppServices.current.resetDeviceSync();
     ref.invalidate(currentUserProvider);
   }
 

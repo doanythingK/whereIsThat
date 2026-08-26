@@ -334,12 +334,14 @@ class WorkspaceActions {
   }) async {
     final saved = await _repository.saveLocation(location, isNew: isNew);
     ref.invalidate(locationsProvider(location.floorPlanId));
+    ref.invalidate(locationsForSpaceProvider(location.spaceId));
     return saved;
   }
 
   Future<void> deleteLocation(Location location) async {
     await _repository.softDeleteLocation(location);
     ref.invalidate(locationsProvider(location.floorPlanId));
+    ref.invalidate(locationsForSpaceProvider(location.spaceId));
     ref.invalidate(itemsProvider((spaceId: location.spaceId, search: null)));
     ref.invalidate(deletedLocationsProvider(location.spaceId));
   }
@@ -347,6 +349,7 @@ class WorkspaceActions {
   Future<void> restoreLocation(Location location) async {
     await _repository.restoreLocation(location);
     ref.invalidate(locationsProvider(location.floorPlanId));
+    ref.invalidate(locationsForSpaceProvider(location.spaceId));
     ref.invalidate(itemsProvider((spaceId: location.spaceId, search: null)));
     ref.invalidate(deletedLocationsProvider(location.spaceId));
   }
@@ -472,6 +475,7 @@ class WorkspaceActions {
       visibility: visibility,
     );
     ref.invalidate(checklistsProvider(spaceId));
+    ref.invalidate(checklistsProvider(null));
     return checklist;
   }
 
@@ -516,6 +520,7 @@ class WorkspaceActions {
   Future<void> toggleMemberCheck(ChecklistMemberCheck check) async {
     await _repository.toggleMemberCheck(check);
     ref.invalidate(memberChecksProvider(check.checklistItemId));
+    ref.invalidate(memberChecksStreamProvider(check.checklistItemId));
   }
 
   Future<void> completeChecklist(
@@ -524,5 +529,6 @@ class WorkspaceActions {
   }) async {
     await _repository.completeChecklist(checklist, complete: complete);
     ref.invalidate(checklistsProvider(checklist.spaceId));
+    ref.invalidate(checklistsProvider(null));
   }
 }

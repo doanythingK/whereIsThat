@@ -259,7 +259,15 @@ class DemoAppRepository implements AppRepository {
   @override
   Future<List<Space>> listSpaces() async {
     final spaces = _spaces.values
-        .where((space) => space.deletedAt == null)
+        .where(
+          (space) =>
+              space.deletedAt == null &&
+              _members.values.any(
+                (member) =>
+                    member.spaceId == space.id &&
+                    member.userId == _user.id,
+              ),
+        )
         .toList();
     spaces.sort(
       (a, b) => (_lastAccessed[b.id] ?? DateTime(1970)).compareTo(
@@ -271,7 +279,17 @@ class DemoAppRepository implements AppRepository {
 
   @override
   Future<List<Space>> listDeletedSpaces() async =>
-      _spaces.values.where((space) => space.deletedAt != null).toList();
+      _spaces.values
+          .where(
+            (space) =>
+                space.deletedAt != null &&
+                _members.values.any(
+                  (member) =>
+                      member.spaceId == space.id &&
+                      member.userId == _user.id,
+                ),
+          )
+          .toList();
 
   @override
   Future<Space> createSpace({
@@ -403,6 +421,7 @@ class DemoAppRepository implements AppRepository {
         _items[item.id] = item.copyWith(
           deletedAt: now,
           deletePurgeAt: now.add(const Duration(days: 30)),
+          version: item.version + 1,
           updatedAt: now,
         );
       }
@@ -496,52 +515,101 @@ class DemoAppRepository implements AppRepository {
 
   @override
   Future<void> softDeleteFloorPlan(FloorPlan floorPlan) async {
-    final active = await listFloorPlans(floorPlan.spaceId);
+    final current = _floorPlans[floorPlan.id];
+    if (current == null ||
+        current.deletedAt != null ||
+        current.spaceId != floorPlan.spaceId) {
+      throw const ConflictException();
+    }
+    final active = await listFloorPlans(current.spaceId);
     if (active.length <= 1) {
       throw const AppException('공간에는 최소 한 개의 평면도가 필요합니다.');
     }
     final now = _now();
-    _floorPlans[floorPlan.id] = floorPlan.copyWith(
-      deletedAt: now,
-      deletePurgeAt: now.add(const Duration(days: 30)),
-      updatedAt: now,
-    );
-    for (final location in _locations.values.where(
-      (item) => item.floorPlanId == floorPlan.id,
-    )) {
+    final purgeAt = now.add(const Duration(days: 30));
+    final locations = _locations.values
+        .where(
+          (location) =>
+              location.floorPlanId == current.id &&
+              location.deletedAt == null,
+        )
+        .toList();
+
+    // Keep the demo repository's relationship behavior aligned with the
+    // database trigger: only active locations/items in this deletion batch
+    // are disconnected and eligible for restoration.
+    for (final location in locations) {
+      final items = _items.values
+          .where(
+            (item) =>
+                item.locationId == location.id && item.deletedAt == null,
+          )
+          .toList();
       _locationRecovery[location.id] = _items.values
-          .where((item) => item.locationId == location.id)
+          .where(
+            (item) =>
+                item.locationId == location.id && item.deletedAt == null,
+          )
           .map((item) => item.id)
           .toList();
       _locations[location.id] = location.copyWith(
         deletedAt: now,
-        deletePurgeAt: now.add(const Duration(days: 30)),
+        deletePurgeAt: purgeAt,
+        updatedAt: now,
       );
-      for (final item in _items.values.where(
-        (item) => item.locationId == location.id,
-      )) {
+      for (final item in items) {
         _items[item.id] = item.copyWith(locationId: null, updatedAt: now);
       }
     }
+    _floorPlans[current.id] = current.copyWith(
+      deletedAt: now,
+      deletePurgeAt: purgeAt,
+      updatedAt: now,
+    );
   }
 
   @override
   Future<void> restoreFloorPlan(FloorPlan floorPlan) async {
-    _floorPlans[floorPlan.id] = floorPlan.copyWith(
+    final current = _floorPlans[floorPlan.id];
+    if (current == null || current.deletedAt == null) {
+      throw const ConflictException();
+    }
+    final deletionAt = current.deletedAt;
+    final purgeAt = current.deletePurgeAt;
+    final now = _now();
+    if (purgeAt == null || !purgeAt.isAfter(now)) {
+      throw const AppException('복구 가능 기간이 지났습니다.');
+    }
+    final locations = _locations.values
+        .where(
+          (location) =>
+              location.floorPlanId == current.id &&
+              location.deletedAt == deletionAt &&
+              location.deletePurgeAt == purgeAt,
+        )
+        .toList();
+
+    _floorPlans[current.id] = current.copyWith(
       deletedAt: null,
       deletePurgeAt: null,
+      updatedAt: now,
     );
-    for (final location in _locations.values.where(
-      (item) => item.floorPlanId == floorPlan.id,
-    )) {
+    for (final location in locations) {
       _locations[location.id] = location.copyWith(
         deletedAt: null,
         deletePurgeAt: null,
+        updatedAt: now,
       );
       for (final itemId in _locationRecovery[location.id] ?? const <String>[]) {
         final item = _items[itemId];
-        if (item != null && item.locationId == null) {
-          _items[item.id] = item.copyWith(locationId: location.id);
+        if (item != null &&
+            item.spaceId == current.spaceId &&
+            item.locationId == null &&
+            item.deletedAt == null) {
+          _items[item.id] = item.copyWith(
+            locationId: location.id,
+            updatedAt: now,
+          );
         }
       }
     }
@@ -570,6 +638,7 @@ class DemoAppRepository implements AppRepository {
     Location location, {
     required bool isNew,
   }) async {
+    _validateLocationTarget(location);
     final now = _now();
     final saved = isNew
         ? location.copyWith(
@@ -590,35 +659,72 @@ class DemoAppRepository implements AppRepository {
     return location.copyWith(version: location.version + 1, updatedAt: now);
   }
 
+  void _validateLocationTarget(Location location) {
+    final floorPlan = _floorPlans[location.floorPlanId];
+    if (floorPlan == null ||
+        floorPlan.deletedAt != null ||
+        floorPlan.spaceId != location.spaceId) {
+      throw const AppException('위치를 저장할 평면도를 찾을 수 없습니다.');
+    }
+  }
+
   @override
   Future<void> softDeleteLocation(Location location) async {
+    final current = _locations[location.id];
+    if (current == null ||
+        current.deletedAt != null ||
+        current.spaceId != location.spaceId) {
+      throw const ConflictException();
+    }
     final now = _now();
-    _locations[location.id] = location.copyWith(
+    final purgeAt = now.add(const Duration(days: 30));
+    final items = _items.values
+        .where(
+          (item) =>
+              item.locationId == current.id && item.deletedAt == null,
+        )
+        .toList();
+    _locationRecovery[current.id] = items.map((item) => item.id).toList();
+    _locations[current.id] = current.copyWith(
       deletedAt: now,
-      deletePurgeAt: now.add(const Duration(days: 30)),
+      deletePurgeAt: purgeAt,
+      updatedAt: now,
     );
-    for (final item in _items.values.where(
-      (item) => item.locationId == location.id,
-    )) {
-      final recovery = _locationRecovery.putIfAbsent(
-        location.id,
-        () => <String>[],
-      );
-      if (!recovery.contains(item.id)) recovery.add(item.id);
+    for (final item in items) {
       _items[item.id] = item.copyWith(locationId: null, updatedAt: now);
     }
   }
 
   @override
   Future<void> restoreLocation(Location location) async {
-    _locations[location.id] = location.copyWith(
+    final current = _locations[location.id];
+    if (current == null || current.deletedAt == null) {
+      throw const ConflictException();
+    }
+    final purgeAt = current.deletePurgeAt;
+    final now = _now();
+    if (purgeAt == null || !purgeAt.isAfter(now)) {
+      throw const AppException('복구 가능 기간이 지났습니다.');
+    }
+    final floorPlan = _floorPlans[current.floorPlanId];
+    if (floorPlan == null || floorPlan.deletedAt != null) {
+      throw const AppException('평면도가 삭제된 상태입니다.');
+    }
+    _locations[current.id] = current.copyWith(
       deletedAt: null,
       deletePurgeAt: null,
+      updatedAt: now,
     );
-    for (final itemId in _locationRecovery[location.id] ?? const <String>[]) {
+    for (final itemId in _locationRecovery[current.id] ?? const <String>[]) {
       final item = _items[itemId];
-      if (item != null && item.locationId == null) {
-        _items[item.id] = item.copyWith(locationId: location.id);
+      if (item != null &&
+          item.spaceId == current.spaceId &&
+          item.locationId == null &&
+          item.deletedAt == null) {
+        _items[item.id] = item.copyWith(
+          locationId: current.id,
+          updatedAt: now,
+        );
       }
     }
   }
@@ -710,8 +816,24 @@ class DemoAppRepository implements AppRepository {
   Future<Item> saveItem(Item item, {required bool isNew}) async {
     final now = _now();
     final current = _items[item.id];
-    if (!isNew && current != null && current.version != item.version) {
+    if (!isNew &&
+        (current == null ||
+            current.deletedAt != null ||
+            current.version != item.version)) {
       throw const ConflictException();
+    }
+    final targetSpace = _spaces[item.spaceId];
+    if (targetSpace == null || targetSpace.deletedAt != null) {
+      throw const AppException('물건을 저장할 공간을 찾을 수 없습니다.');
+    }
+    final locationId = item.locationId;
+    if (locationId != null) {
+      final location = _locations[locationId];
+      if (location == null ||
+          location.deletedAt != null ||
+          location.spaceId != item.spaceId) {
+        throw const AppException('물건을 저장할 위치를 찾을 수 없습니다.');
+      }
     }
     final saved = isNew
         ? item.copyWith(
@@ -726,21 +848,49 @@ class DemoAppRepository implements AppRepository {
 
   @override
   Future<void> softDeleteItem(Item item) async {
+    final current = _items[item.id];
+    if (current == null ||
+        current.deletedAt != null ||
+        current.version != item.version) {
+      throw const ConflictException();
+    }
     final now = _now();
-    _items[item.id] = item.copyWith(
+    _items[item.id] = current.copyWith(
       deletedAt: now,
       deletePurgeAt: now.add(const Duration(days: 30)),
-      version: item.version + 1,
+      version: current.version + 1,
       updatedAt: now,
     );
   }
 
   @override
-  Future<void> restoreItem(Item item) async => _items[item.id] = item.copyWith(
-    deletedAt: null,
-    deletePurgeAt: null,
-    updatedAt: _now(),
-  );
+  Future<void> restoreItem(Item item) async {
+    final current = _items[item.id];
+    if (current == null || current.deletedAt == null) {
+      throw const ConflictException();
+    }
+    final purgeAt = current.deletePurgeAt;
+    final now = _now();
+    if (purgeAt == null || !purgeAt.isAfter(now)) {
+      throw const AppException('복구 가능 기간이 지났습니다.');
+    }
+    final oldLocationId = current.locationId;
+    final location = oldLocationId == null
+        ? null
+        : _locations[oldLocationId];
+    final validLocationId = location != null &&
+            location.deletedAt == null &&
+            location.spaceId == current.spaceId
+        ? location.id
+        : null;
+    _items[item.id] = current.copyWith(
+      locationId: validLocationId,
+      deletedAt: null,
+      deletePurgeAt: null,
+      version: current.version + 1,
+      updatedAt: now,
+    );
+  }
 
   @override
   Future<void> toggleFavorite(Item item) async {
@@ -755,14 +905,37 @@ class DemoAppRepository implements AppRepository {
     required String targetSpaceId,
     String? targetLocationId,
   }) async {
-    if (!_spaces.containsKey(targetSpaceId)) {
+    final targetSpace = _spaces[targetSpaceId];
+    if (targetSpace == null || targetSpace.deletedAt != null) {
       throw const AppException('이동할 공간을 찾을 수 없습니다.');
     }
+    final current = _items[item.id];
+    if (current == null ||
+        current.deletedAt != null ||
+        current.version != item.version) {
+      throw const ConflictException();
+    }
+    if (targetLocationId != null) {
+      final targetLocation = _locations[targetLocationId];
+      if (targetLocation == null ||
+          targetLocation.deletedAt != null ||
+          targetLocation.spaceId != targetSpaceId) {
+        throw const AppException('이동할 위치를 찾을 수 없습니다.');
+      }
+    }
+    final category = current.categoryId == null
+        ? null
+        : _categories[current.categoryId!];
+    final targetCategoryId = category == null ||
+            (category.spaceId != null && category.spaceId != targetSpaceId)
+        ? null
+        : current.categoryId;
     final now = _now();
-    final moved = item.copyWith(
+    final moved = current.copyWith(
       spaceId: targetSpaceId,
       locationId: targetLocationId,
-      version: item.version + 1,
+      categoryId: targetCategoryId,
+      version: current.version + 1,
       updatedAt: now,
     );
     _items[item.id] = moved;
@@ -793,24 +966,30 @@ class DemoAppRepository implements AppRepository {
     required Uint8List bytes,
     required String extension,
   }) async {
-    if (item.photos.length >= 3) {
+    final current = _items[item.id] ?? item;
+    if (current.photos.length >= 3) {
       throw const AppException('물건 사진은 최대 3장까지 추가할 수 있습니다.');
     }
     final photo = ItemPhoto(
       id: _uuid.v4(),
-      itemId: item.id,
-      storagePath: '${_user.id}/${item.id}/${_uuid.v4()}.$extension',
-      isPrimary: item.photos.isEmpty,
-      sortOrder: item.photos.length,
+      itemId: current.id,
+      storagePath: '${_user.id}/${current.id}/${_uuid.v4()}.$extension',
+      isPrimary: current.photos.every((photo) => !photo.isPrimary),
+      sortOrder: current.photos.length,
     );
-    _items[item.id] = item.copyWith(photos: [...item.photos, photo]);
+    _items[current.id] = current.copyWith(photos: [...current.photos, photo]);
     return photo;
   }
 
   @override
   Future<void> deleteItemPhoto(Item item, ItemPhoto photo) async {
-    _items[item.id] = item.copyWith(
-      photos: item.photos.where((entry) => entry.id != photo.id).toList(),
+    final current = _items[item.id];
+    if (current == null) throw const AppException('물건을 찾을 수 없습니다.');
+    if (!current.photos.any((entry) => entry.id == photo.id)) {
+      throw const AppException('사진을 찾을 수 없습니다.');
+    }
+    _items[item.id] = current.copyWith(
+      photos: current.photos.where((entry) => entry.id != photo.id).toList(),
     );
   }
 
@@ -868,7 +1047,12 @@ class DemoAppRepository implements AppRepository {
   @override
   Future<List<Checklist>> listChecklists({String? spaceId}) async => _checklists
       .values
-      .where((item) => spaceId == null || item.spaceId == spaceId)
+      .where(
+        (item) =>
+            spaceId == null ||
+            item.spaceId == spaceId ||
+            (item.spaceId == null && item.createdBy == _user.id),
+      )
       .toList();
 
   @override

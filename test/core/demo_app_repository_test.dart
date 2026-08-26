@@ -40,8 +40,98 @@ void main() {
             .singleWhere((item) => item.id == before.id);
         expect(afterRestore.locationId, location.id);
         expect(await repository.listLocations(plan.id), hasLength(1));
+
+        await repository.saveItem(
+          afterRestore.copyWith(locationId: null),
+          isNew: false,
+        );
+        await repository.softDeleteLocation(location);
+        await repository.restoreLocation(location);
+        expect(
+          (await repository.listItems('demo-space'))
+              .singleWhere((item) => item.id == before.id)
+              .locationId,
+          isNull,
+        );
       },
     );
+
+    test(
+      'restoring a floor plan does not restore an independently deleted location',
+      () async {
+        final repository = DemoAppRepository();
+        final firstPlan = (await repository.listFloorPlans('demo-space')).single;
+        final secondPlan = await repository.createFloorPlan(
+          spaceId: 'demo-space',
+          name: '2층',
+        );
+        final firstLocation =
+            (await repository.listLocations(firstPlan.id)).single;
+        final secondLocation = await repository.saveLocation(
+          firstLocation.copyWith(
+            id: '',
+            floorPlanId: secondPlan.id,
+            name: '2층 수납장',
+          ),
+          isNew: true,
+        );
+
+        await repository.softDeleteLocation(secondLocation);
+        await repository.softDeleteFloorPlan(secondPlan);
+        await repository.restoreFloorPlan(secondPlan);
+
+        expect(await repository.listLocations(secondPlan.id), isEmpty);
+        expect(
+          (await repository.listDeletedLocations('demo-space'))
+              .any((location) => location.id == secondLocation.id),
+          isTrue,
+        );
+      },
+    );
+
+    test('restoring an item clears a location deleted after the item', () async {
+      final repository = DemoAppRepository();
+      final location = (await repository.listLocations('demo-floor-plan')).single;
+      final item = (await repository.listItems('demo-space'))
+          .singleWhere((entry) => entry.locationId == location.id);
+
+      await repository.softDeleteItem(item);
+      await repository.softDeleteLocation(location);
+      final deletedItem = (await repository.listDeletedItems('demo-space'))
+          .singleWhere((entry) => entry.id == item.id);
+      await repository.restoreItem(deletedItem);
+
+      expect(
+        (await repository.listItems('demo-space'))
+            .singleWhere((entry) => entry.id == item.id)
+            .locationId,
+        isNull,
+      );
+    });
+
+    test('moving an item clears a source-space category', () async {
+      final repository = DemoAppRepository();
+      final category = await repository.createCategory(
+        spaceId: 'demo-space',
+        name: '공간 전용 카테고리',
+      );
+      final item = (await repository.listItems('demo-space')).first;
+      final categorized = await repository.saveItem(
+        item.copyWith(categoryId: category.id),
+        isNew: false,
+      );
+      final targetSpace = await repository.createSpace(
+        name: '이동 공간',
+        iconKey: 'storage',
+      );
+
+      final moved = await repository.moveItem(
+        categorized,
+        targetSpaceId: targetSpace.id,
+      );
+
+      expect(moved.categoryId, isNull);
+    });
 
     test('floor plan optimistic concurrency rejects stale saves', () async {
       final repository = DemoAppRepository();

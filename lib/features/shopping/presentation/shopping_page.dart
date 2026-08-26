@@ -60,9 +60,13 @@ class ShoppingPage extends ConsumerWidget {
       );
       if (addAnyway != true) return;
     }
-    await ref
-        .read(workspaceActionsProvider)
-        .addShoppingItem(spaceId: spaceId, name: name);
+    try {
+      await ref
+          .read(workspaceActionsProvider)
+          .addShoppingItem(spaceId: spaceId, name: name);
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+    }
   }
 
   Future<void> _complete(
@@ -77,7 +81,12 @@ class ShoppingPage extends ConsumerWidget {
           : null,
       completedAt: !item.isCompleted ? DateTime.now().toUtc() : null,
     );
-    await ref.read(workspaceActionsProvider).updateShoppingItem(updated);
+    try {
+      await ref.read(workspaceActionsProvider).updateShoppingItem(updated);
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+      return;
+    }
     if (!updated.isCompleted || !context.mounted) return;
     final choice = await showModalBottomSheet<String>(
       context: context,
@@ -133,11 +142,35 @@ class ShoppingPage extends ConsumerWidget {
       ),
     );
     if (selected == null) return;
-    await ref
-        .read(workspaceActionsProvider)
-        .updateShoppingItem(
-          item.copyWith(assigneeUserId: selected.isEmpty ? null : selected),
-        );
+    try {
+      await ref
+          .read(workspaceActionsProvider)
+          .updateShoppingItem(
+            item.copyWith(assigneeUserId: selected.isEmpty ? null : selected),
+          );
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+    }
+  }
+
+  Future<void> _delete(
+    BuildContext context,
+    WidgetRef ref,
+    ShoppingItem item,
+  ) async {
+    try {
+      await ref.read(workspaceActionsProvider).deleteShoppingItem(item);
+    } catch (error) {
+      if (context.mounted) {
+        ref.invalidate(shoppingItemsStreamProvider(spaceId));
+        _showError(context, error);
+      }
+    }
+  }
+
+  void _showError(BuildContext context, Object error) {
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(error.toString())));
   }
 
   @override
@@ -164,15 +197,25 @@ class ShoppingPage extends ConsumerWidget {
                   padding: const EdgeInsets.fromLTRB(12, 12, 12, 100),
                   itemCount: values.length,
                   onReorderItem: (oldIndex, newIndex) async {
-                    final moved = values.removeAt(oldIndex);
+                    final reordered = List<ShoppingItem>.from(values);
+                    final moved = reordered.removeAt(oldIndex);
                     if (newIndex > oldIndex) newIndex -= 1;
-                    values.insert(newIndex, moved);
-                    for (var index = 0; index < values.length; index++) {
-                      await ref
-                          .read(workspaceActionsProvider)
-                          .updateShoppingItem(
-                            values[index].copyWith(sortOrder: index.toDouble()),
-                          );
+                    reordered.insert(newIndex, moved);
+                    try {
+                      for (var index = 0; index < reordered.length; index++) {
+                        await ref
+                            .read(workspaceActionsProvider)
+                            .updateShoppingItem(
+                              reordered[index].copyWith(
+                                sortOrder: index.toDouble(),
+                              ),
+                            );
+                      }
+                    } catch (error) {
+                      if (context.mounted) {
+                        ref.invalidate(shoppingItemsStreamProvider(spaceId));
+                        _showError(context, error);
+                      }
                     }
                   },
                   itemBuilder: (context, index) {
@@ -188,9 +231,7 @@ class ShoppingPage extends ConsumerWidget {
                           child: const Icon(Icons.delete_outline),
                         ),
                         direction: DismissDirection.endToStart,
-                        onDismissed: (_) => ref
-                            .read(workspaceActionsProvider)
-                            .deleteShoppingItem(item),
+                        onDismissed: (_) => _delete(context, ref, item),
                         child: CheckboxListTile(
                           value: item.isCompleted,
                           onChanged: (_) => _complete(context, ref, item),

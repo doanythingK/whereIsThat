@@ -21,6 +21,7 @@
   "addItem": "물건 등록",
   "itemName": "물건명",
   "quantity": "수량",
+  "invalidQuantity": "수량을 0 이상으로 입력해 주세요.",
   "unit": "단위",
   "location": "보관 위치",
   "unassignedLocation": "위치 미지정",

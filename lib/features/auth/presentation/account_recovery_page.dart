@@ -34,8 +34,13 @@ class _AccountRecoveryPageState extends ConsumerState<AccountRecoveryPage> {
   }
 
   Future<void> _signOut() async {
-    await ref.read(authActionsProvider).signOut();
-    if (mounted) context.go('/auth');
+    setState(() => _error = null);
+    try {
+      await ref.read(authActionsProvider).signOut();
+      if (mounted) context.go('/auth');
+    } catch (error) {
+      if (mounted) setState(() => _error = error.toString());
+    }
   }
 
   @override

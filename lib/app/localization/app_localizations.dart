@@ -44,6 +44,8 @@ class AppLocalizations {
   String get addItem => _text('물건 등록', 'Add item');
   String get itemName => _text('물건명', 'Item name');
   String get quantity => _text('수량', 'Quantity');
+  String get invalidQuantity =>
+      _text('수량을 0 이상으로 입력해 주세요.', 'Enter a quantity of 0 or more.');
   String get unit => _text('단위', 'Unit');
   String get location => _text('보관 위치', 'Storage location');
   String get unassignedLocation => _text('위치 미지정', 'Unassigned');

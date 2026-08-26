@@ -21,6 +21,7 @@
   "addItem": "Add item",
   "itemName": "Item name",
   "quantity": "Quantity",
+  "invalidQuantity": "Enter a quantity of 0 or more.",
   "unit": "Unit",
   "location": "Location",
   "unassignedLocation": "Unassigned",

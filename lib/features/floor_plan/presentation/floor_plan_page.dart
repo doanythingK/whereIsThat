@@ -10,6 +10,25 @@ import '../../../core/models/app_models.dart';
 import '../../../core/services/app_services.dart';
 import '../../item/presentation/item_editor_sheet.dart';
 
+int _gridDimension(Object? value) {
+  final dimension = value is num ? value.toInt() : 20;
+  return dimension.clamp(4, 60).toInt();
+}
+
+({int rows, int cols}) _gridDimensions(Map<String, dynamic> layoutData) {
+  final grid = layoutData['grid'];
+  return (
+    rows: _gridDimension(grid is Map ? grid['rows'] : null),
+    cols: _gridDimension(grid is Map ? grid['cols'] : null),
+  );
+}
+
+List<dynamic> _layoutList(Object? value) =>
+    value is List ? value.cast<dynamic>() : const <dynamic>[];
+
+Map<String, dynamic>? _layoutMap(Object? value) =>
+    value is Map ? Map<String, dynamic>.from(value) : null;
+
 class FloorPlanPage extends ConsumerStatefulWidget {
   const FloorPlanPage({required this.spaceId, this.focusLocationId, super.key});
 
@@ -21,15 +40,46 @@ class FloorPlanPage extends ConsumerStatefulWidget {
 }
 
 class _FloorPlanPageState extends ConsumerState<FloorPlanPage> {
+  static const _sceneSize = Size(600, 600);
+
   String? _selectedPlanId;
   final List<Map<String, dynamic>> _history = [];
   int _historyIndex = -1;
   String? _historyPlanId;
   bool _saving = false;
   String _editMode = 'location';
+  bool _hasUserSelectedPlan = false;
+  final _transformationController = TransformationController();
+  final _viewportKey = GlobalKey();
 
   bool get _hasUnsavedChanges =>
       _historyPlanId == _selectedPlanId && _historyIndex >= 0;
+
+  ({double x, double y})? _normalizedPosition(TapUpDetails details) {
+    final renderObject = _viewportKey.currentContext?.findRenderObject();
+    if (renderObject is! RenderBox) return null;
+
+    // The painter renders scene coordinates, while the raw tap is in the
+    // viewport. Convert through the same controller used by InteractiveViewer.
+    final viewportPosition = renderObject.globalToLocal(details.globalPosition);
+    final scenePosition = _transformationController.toScene(viewportPosition);
+    if (scenePosition.dx < 0 ||
+        scenePosition.dy < 0 ||
+        scenePosition.dx > _sceneSize.width ||
+        scenePosition.dy > _sceneSize.height) {
+      return null;
+    }
+    return (
+      x: (scenePosition.dx / _sceneSize.width).clamp(0.0, 1.0).toDouble(),
+      y: (scenePosition.dy / _sceneSize.height).clamp(0.0, 1.0).toDouble(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _transformationController.dispose();
+    super.dispose();
+  }
 
   Future<void> _showLocationActions(Location location) async {
     final action = await showModalBottomSheet<String>(
@@ -65,6 +115,7 @@ class _FloorPlanPageState extends ConsumerState<FloorPlanPage> {
         location: location,
       );
       if (details == null || details.name.trim().isEmpty) return;
+      if (!mounted) return;
       try {
         await ref
             .read(workspaceActionsProvider)
@@ -93,9 +144,18 @@ class _FloorPlanPageState extends ConsumerState<FloorPlanPage> {
           initialLocationId: location.id,
         ),
       );
-      ref.invalidate(itemsProvider((spaceId: location.spaceId, search: null)));
+      if (mounted) {
+        ref.invalidate(itemsProvider((spaceId: location.spaceId, search: null)));
+      }
     } else if (action == 'delete') {
-      await ref.read(workspaceActionsProvider).deleteLocation(location);
+      try {
+        await ref.read(workspaceActionsProvider).deleteLocation(location);
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(error.toString())));
+        }
+      }
     }
   }
 
@@ -107,9 +167,17 @@ class _FloorPlanPageState extends ConsumerState<FloorPlanPage> {
       initial: context.l10n.newFloorPlan,
     );
     if (name == null || name.trim().isEmpty) return;
-    await ref
-        .read(workspaceActionsProvider)
-        .createFloorPlan(spaceId: widget.spaceId, name: name.trim());
+    if (!mounted) return;
+    try {
+      await ref
+          .read(workspaceActionsProvider)
+          .createFloorPlan(spaceId: widget.spaceId, name: name.trim());
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    }
   }
 
   Future<void> _addLocation(
@@ -123,62 +191,69 @@ class _FloorPlanPageState extends ConsumerState<FloorPlanPage> {
       initial: context.l10n.defaultLocationName,
     );
     if (details == null || details.name.trim().isEmpty) return;
+    if (!mounted) return;
     final now = DateTime.now().toUtc();
-    await ref
-        .read(workspaceActionsProvider)
-        .saveLocation(
-          Location(
-            id: '',
-            spaceId: plan.spaceId,
-            floorPlanId: plan.id,
-            roomKey: _roomAt(plan, x, y),
-            name: details.name.trim(),
-            locationType: details.type,
-            iconKey: details.iconKey,
-            iconColor: details.color,
-            showLabel: details.showLabel,
-            xRatio: x.clamp(0.0, 1.0),
-            yRatio: y.clamp(0.0, 1.0),
-            createdBy:
-                ref.read(appRepositoryProvider).signedInUser?.id ?? 'demo-user',
-            createdAt: now,
-            updatedAt: now,
-          ),
-          isNew: true,
-        );
+    try {
+      await ref
+          .read(workspaceActionsProvider)
+          .saveLocation(
+            Location(
+              id: '',
+              spaceId: plan.spaceId,
+              floorPlanId: plan.id,
+              roomKey: _roomAt(plan, x, y),
+              name: details.name.trim(),
+              locationType: details.type,
+              iconKey: details.iconKey,
+              iconColor: details.color,
+              showLabel: details.showLabel,
+              xRatio: x.clamp(0.0, 1.0).toDouble(),
+              yRatio: y.clamp(0.0, 1.0).toDouble(),
+              createdBy:
+                  ref.read(appRepositoryProvider).signedInUser?.id ??
+                  'demo-user',
+              createdAt: now,
+              updatedAt: now,
+            ),
+            isNew: true,
+          );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    }
   }
 
   String? _roomAt(FloorPlan plan, double x, double y) {
-    final grid = Map<String, dynamic>.from(
-      (plan.layoutData['grid'] as Map?) ?? const {'rows': 20, 'cols': 20},
-    );
-    final rows = (grid['rows'] as num?)?.toInt() ?? 20;
-    final cols = (grid['cols'] as num?)?.toInt() ?? 20;
+    final dimensions = _gridDimensions(plan.layoutData);
+    final rows = dimensions.rows;
+    final cols = dimensions.cols;
     final row = (y.clamp(0.0, .999999) * rows).floor();
     final col = (x.clamp(0.0, .999999) * cols).floor();
     final key = '$row:$col';
-    final rooms =
-        ((plan.layoutData['rooms'] as List<dynamic>?) ?? const <dynamic>[]);
+    final rooms = _layoutList(plan.layoutData['rooms']);
     for (final raw in rooms) {
-      final room = Map<String, dynamic>.from(raw as Map);
-      final cells = (room['cells'] as List<dynamic>?) ?? const <dynamic>[];
+      final room = _layoutMap(raw);
+      if (room == null) continue;
+      final cells = _layoutList(room['cells']);
       if (cells.any((cell) => cell.toString() == key)) {
-        return room['id'] as String?;
+        final roomId = room['id'];
+        return roomId is String ? roomId : null;
       }
     }
     return null;
   }
 
   Future<void> _addRoom(FloorPlan plan) async {
-    final currentRooms =
-        ((plan.layoutData['rooms'] as List<dynamic>?) ?? const <dynamic>[])
-            .map((room) => Map<String, dynamic>.from(room as Map))
-            .toList();
-    final selectedCells =
-        ((plan.layoutData['activeCells'] as List<dynamic>?) ??
-                const <dynamic>[])
-            .map((cell) => cell.toString())
-            .toSet();
+    final currentRooms = <Map<String, dynamic>>[];
+    for (final raw in _layoutList(plan.layoutData['rooms'])) {
+      final room = _layoutMap(raw);
+      if (room != null) currentRooms.add(room);
+    }
+    final selectedCells = _layoutList(plan.layoutData['activeCells'])
+        .map((cell) => cell.toString())
+        .toSet();
     if (selectedCells.isEmpty) {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(context.l10n.roomAreaPrompt)));
@@ -186,8 +261,7 @@ class _FloorPlanPageState extends ConsumerState<FloorPlanPage> {
     }
     final occupiedCells = currentRooms
         .expand(
-          (room) => ((room['cells'] as List<dynamic>?) ?? const <dynamic>[])
-              .map((cell) => cell.toString()),
+          (room) => _layoutList(room['cells']).map((cell) => cell.toString()),
         )
         .toSet();
     if (selectedCells.any(occupiedCells.contains)) {
@@ -200,6 +274,7 @@ class _FloorPlanPageState extends ConsumerState<FloorPlanPage> {
       initialName: context.l10n.defaultRoomName,
     );
     if (room == null || room.name.trim().isEmpty) return;
+    if (!mounted) return;
     final roomId = 'room-${DateTime.now().microsecondsSinceEpoch}';
     final updated = Map<String, dynamic>.from(plan.layoutData);
     currentRooms.add({
@@ -228,17 +303,15 @@ class _FloorPlanPageState extends ConsumerState<FloorPlanPage> {
   }
 
   void _toggleGridCell(FloorPlan plan, double x, double y) {
-    final grid = Map<String, dynamic>.from(
-      (plan.layoutData['grid'] as Map?) ?? const {'rows': 20, 'cols': 20},
-    );
-    final rows = (grid['rows'] as num?)?.toInt() ?? 20;
-    final cols = (grid['cols'] as num?)?.toInt() ?? 20;
+    final dimensions = _gridDimensions(plan.layoutData);
+    final rows = dimensions.rows;
+    final cols = dimensions.cols;
     final row = (y.clamp(0.0, .999999) * rows).floor();
     final col = (x.clamp(0.0, .999999) * cols).floor();
     final key = '$row:$col';
     final updated = Map<String, dynamic>.from(plan.layoutData);
     final field = _editMode == 'cell' ? 'activeCells' : 'walls';
-    final values = ((updated[field] as List<dynamic>?) ?? const <dynamic>[])
+    final values = _layoutList(updated[field])
         .map((value) => value.toString())
         .toList();
     if (values.contains(key)) {
@@ -251,14 +324,12 @@ class _FloorPlanPageState extends ConsumerState<FloorPlanPage> {
   }
 
   Future<void> _expandGrid(FloorPlan plan) async {
-    final grid = Map<String, dynamic>.from(
-      (plan.layoutData['grid'] as Map?) ?? const {'rows': 20, 'cols': 20},
-    );
+    final dimensions = _gridDimensions(plan.layoutData);
     final rowsController = TextEditingController(
-      text: ((grid['rows'] as num?)?.toInt() ?? 20).toString(),
+      text: dimensions.rows.toString(),
     );
     final colsController = TextEditingController(
-      text: ((grid['cols'] as num?)?.toInt() ?? 20).toString(),
+      text: dimensions.cols.toString(),
     );
     final result = await showDialog<(int, int)?>(
       context: context,
@@ -300,7 +371,7 @@ class _FloorPlanPageState extends ConsumerState<FloorPlanPage> {
     );
     rowsController.dispose();
     colsController.dispose();
-    if (result == null) return;
+    if (result == null || !mounted) return;
     final rows = result.$1.clamp(4, 60);
     final cols = result.$2.clamp(4, 60);
     final updated = Map<String, dynamic>.from(plan.layoutData);
@@ -403,6 +474,7 @@ class _FloorPlanPageState extends ConsumerState<FloorPlanPage> {
     if (!await _confirmDiscardIfNeeded() || !mounted) return;
     setState(() {
       _selectedPlanId = planId;
+      _hasUserSelectedPlan = true;
       _history.clear();
       _historyIndex = -1;
       _historyPlanId = planId;
@@ -427,14 +499,32 @@ class _FloorPlanPageState extends ConsumerState<FloorPlanPage> {
         ],
       ),
     );
-    if (confirmed == true) {
+    if (confirmed != true || !mounted) return;
+    if (!await _confirmDiscardIfNeeded() || !mounted) return;
+    try {
       await ref.read(workspaceActionsProvider).deleteFloorPlan(plan);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.toString())));
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final plans = ref.watch(floorPlansProvider(widget.spaceId));
+    AsyncValue<List<Location>>? focusedLocationsState;
+    Location? focusedLocation;
+    if (widget.focusLocationId != null) {
+      focusedLocationsState = ref.watch(
+        locationsForSpaceProvider(widget.spaceId),
+      );
+      final allLocations = focusedLocationsState.value ?? const <Location>[];
+      focusedLocation = allLocations
+          .where((location) => location.id == widget.focusLocationId)
+          .firstOrNull;
+    }
     return PopScope(
       canPop: !_hasUnsavedChanges,
       onPopInvokedWithResult: (didPop, result) async {
@@ -467,9 +557,19 @@ class _FloorPlanPageState extends ConsumerState<FloorPlanPage> {
                 ),
               );
             }
+            final focusPlanId = focusedLocation?.floorPlanId;
+            final shouldUseFocusedPlan =
+                !_hasUserSelectedPlan &&
+                !_hasUnsavedChanges &&
+                focusedLocationsState?.hasValue == true &&
+                focusPlanId != null;
             final selected =
                 values
-                    .where((plan) => plan.id == _selectedPlanId)
+                    .where(
+                      (plan) =>
+                          plan.id ==
+                          (shouldUseFocusedPlan ? focusPlanId : _selectedPlanId),
+                    )
                     .firstOrNull ??
                 values.first;
             if (_selectedPlanId != selected.id) _selectedPlanId = selected.id;
@@ -553,62 +653,77 @@ class _FloorPlanPageState extends ConsumerState<FloorPlanPage> {
                         const Center(child: CircularProgressIndicator()),
                     error: (error, stack) =>
                         Center(child: Text(error.toString())),
-                    data: (locationValues) => Center(
-                      child: InteractiveViewer(
-                        minScale: .5,
-                        maxScale: 3,
-                        boundaryMargin: const EdgeInsets.all(120),
+                    data: (locationValues) => LayoutBuilder(
+                      builder: (context, constraints) => Center(
                         child: SizedBox(
-                          width: 600,
-                          height: 600,
-                          child: GestureDetector(
-                            onTapUp: (details) {
-                              final x = details.localPosition.dx / 600;
-                              final y = details.localPosition.dy / 600;
-                              if (_editMode != 'location') {
-                                _toggleGridCell(displayedPlan, x, y);
-                                return;
-                              }
-                              final hit = locationValues
-                                  .where(
-                                    (location) =>
-                                        math.max(
-                                          (location.xRatio - x).abs(),
-                                          (location.yRatio - y).abs(),
-                                        ) <
-                                        .07,
-                                  )
-                                  .toList();
-                              if (hit.length == 1) {
-                                _showLocationActions(hit.single);
-                              } else if (hit.length > 1) {
-                                showModalBottomSheet<void>(
-                                  context: context,
-                                  builder: (_) => SafeArea(
-                                    child: ListView(
-                                      shrinkWrap: true,
-                                      children: [
-                                        for (final location in hit)
-                                          ListTile(
-                                            title: Text(location.name),
-                                            onTap: () {
-                                              Navigator.pop(context);
-                                              _showLocationActions(location);
-                                            },
-                                          ),
-                                      ],
-                                    ),
+                          key: _viewportKey,
+                          width: constraints.maxWidth,
+                          height: constraints.maxHeight,
+                          child: InteractiveViewer(
+                            transformationController: _transformationController,
+                            constrained: false,
+                            alignment: Alignment.topLeft,
+                            minScale: .5,
+                            maxScale: 3,
+                            boundaryMargin: const EdgeInsets.all(120),
+                            child: SizedBox(
+                              width: _sceneSize.width,
+                              height: _sceneSize.height,
+                              child: GestureDetector(
+                                onTapUp: (details) {
+                                  final normalized = _normalizedPosition(
+                                    details,
+                                  );
+                                  if (normalized == null) return;
+                                  final x = normalized.x;
+                                  final y = normalized.y;
+                                  if (_editMode != 'location') {
+                                    _toggleGridCell(displayedPlan, x, y);
+                                    return;
+                                  }
+                                  final hit = locationValues
+                                      .where(
+                                        (location) =>
+                                            math.max(
+                                              (location.xRatio - x).abs(),
+                                              (location.yRatio - y).abs(),
+                                            ) <
+                                            .07,
+                                      )
+                                      .toList();
+                                  if (hit.length == 1) {
+                                    _showLocationActions(hit.single);
+                                  } else if (hit.length > 1) {
+                                    showModalBottomSheet<void>(
+                                      context: context,
+                                      builder: (_) => SafeArea(
+                                        child: ListView(
+                                          shrinkWrap: true,
+                                          children: [
+                                            for (final location in hit)
+                                              ListTile(
+                                                title: Text(location.name),
+                                                onTap: () {
+                                                  Navigator.pop(context);
+                                                  _showLocationActions(location);
+                                                },
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    );
+                                  } else {
+                                    _addLocation(displayedPlan, x: x, y: y);
+                                  }
+                                },
+                                child: CustomPaint(
+                                  size: _sceneSize,
+                                  painter: _FloorPlanPainter(
+                                    plan: displayedPlan,
+                                    locations: locationValues,
+                                    focusLocationId: widget.focusLocationId,
                                   ),
-                                );
-                              } else {
-                                _addLocation(displayedPlan, x: x, y: y);
-                              }
-                            },
-                            child: CustomPaint(
-                              painter: _FloorPlanPainter(
-                                plan: displayedPlan,
-                                locations: locationValues,
-                                focusLocationId: widget.focusLocationId,
+                                ),
                               ),
                             ),
                           ),
@@ -693,9 +808,9 @@ class _FloorPlanPainter extends CustomPainter {
     final grid = Paint()
       ..color = const Color(0xFFE2E8F0)
       ..strokeWidth = 1;
-    final gridData = (plan.layoutData['grid'] as Map?) ?? const {};
-    final rows = (gridData['rows'] as num?)?.toInt() ?? 20;
-    final cols = (gridData['cols'] as num?)?.toInt() ?? 20;
+    final dimensions = _gridDimensions(plan.layoutData);
+    final rows = dimensions.rows;
+    final cols = dimensions.cols;
     final cellWidth = size.width / cols;
     final cellHeight = size.height / rows;
     for (var i = 0; i <= cols; i++) {
@@ -712,36 +827,43 @@ class _FloorPlanPainter extends CustomPainter {
         grid,
       );
     }
-    final activeCells =
-        ((plan.layoutData['activeCells'] as List<dynamic>?) ??
-                const <dynamic>[])
-            .map((value) => value.toString())
-            .toSet();
+    final activeCells = _layoutList(plan.layoutData['activeCells'])
+        .map((value) => value.toString())
+        .toSet();
     final activePaint = Paint()..color = const Color(0xFFE0F2FE);
     for (final key in activeCells) {
       final parts = key.split(':');
       if (parts.length != 2) continue;
       final row = int.tryParse(parts[0]);
       final col = int.tryParse(parts[1]);
-      if (row == null || col == null || row >= rows || col >= cols) continue;
+      if (row == null ||
+          col == null ||
+          row < 0 ||
+          col < 0 ||
+          row >= rows ||
+          col >= cols) {
+        continue;
+      }
       canvas.drawRect(
         Rect.fromLTWH(col * cellWidth, row * cellHeight, cellWidth, cellHeight),
         activePaint,
       );
     }
-    final rooms =
-        (plan.layoutData['rooms'] as List<dynamic>?) ?? const <dynamic>[];
+    final rooms = _layoutList(plan.layoutData['rooms']);
     for (final raw in rooms) {
-      final room = Map<String, dynamic>.from(raw as Map);
-      final cells = (room['cells'] as List<dynamic>?) ?? const <dynamic>[];
+      final room = _layoutMap(raw);
+      if (room == null) continue;
+      final cells = _layoutList(room['cells']);
+      final roomColor = room['color'];
       final roomPaint = Paint()
-        ..color = _color(room['color'] as String? ?? '#DBEAFE')
+        ..color = _color(roomColor is String ? roomColor : '#DBEAFE')
             .withValues(alpha: .55);
       for (final rawCell in cells) {
         final parts = rawCell.toString().split(':');
         if (parts.length != 2) continue;
         final row = int.tryParse(parts[0]) ?? 0;
         final col = int.tryParse(parts[1]) ?? 0;
+        if (row < 0 || col < 0 || row >= rows || col >= cols) continue;
         canvas.drawRect(
           Rect.fromLTWH(
             col * cellWidth,
@@ -756,9 +878,11 @@ class _FloorPlanPainter extends CustomPainter {
       if (first != null && first.length == 2) {
         final row = int.tryParse(first[0]) ?? 0;
         final col = int.tryParse(first[1]) ?? 0;
+        if (row < 0 || col < 0 || row >= rows || col >= cols) continue;
+        final roomName = room['name'];
         TextPainter(
             text: TextSpan(
-              text: room['name'] as String? ?? '',
+              text: roomName is String ? roomName : '',
               style: const TextStyle(
                 fontSize: 14,
                 color: Color(0xFF1E3A8A),
@@ -774,16 +898,22 @@ class _FloorPlanPainter extends CustomPainter {
     final wallPaint = Paint()
       ..color = const Color(0xFF334155)
       ..strokeWidth = 4;
-    final walls =
-        ((plan.layoutData['walls'] as List<dynamic>?) ?? const <dynamic>[]).map(
-          (value) => value.toString(),
-        );
+    final walls = _layoutList(plan.layoutData['walls']).map(
+      (value) => value.toString(),
+    );
     for (final key in walls) {
       final parts = key.split(':');
       if (parts.length != 2) continue;
       final row = int.tryParse(parts[0]);
       final col = int.tryParse(parts[1]);
-      if (row == null || col == null || row >= rows || col >= cols) continue;
+      if (row == null ||
+          col == null ||
+          row < 0 ||
+          col < 0 ||
+          row >= rows ||
+          col >= cols) {
+        continue;
+      }
       canvas.drawRect(
         Rect.fromLTWH(
           col * cellWidth + 1,

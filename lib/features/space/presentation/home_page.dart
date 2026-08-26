@@ -126,6 +126,7 @@ class HomePage extends ConsumerWidget {
       isScrollControlled: true,
       builder: (_) => ItemEditorSheet(spaceId: spaceId),
     );
+    if (!context.mounted) return;
     ref.invalidate(itemsProvider((spaceId: spaceId, search: null)));
   }
 }
@@ -275,7 +276,14 @@ class _ShortcutGrid extends ConsumerWidget {
       ),
     );
     if (result == null) return;
-    await ref.read(workspaceActionsProvider).saveHomeShortcuts(result);
+    try {
+      await ref.read(workspaceActionsProvider).saveHomeShortcuts(result);
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    }
   }
 }
 
@@ -299,8 +307,16 @@ class _FavoriteItemCard extends ConsumerWidget {
         trailing: IconButton(
           icon: const Icon(Icons.star),
           onPressed: () async {
-            await ref.read(workspaceActionsProvider).toggleFavorite(item);
-            onChanged();
+            try {
+              await ref.read(workspaceActionsProvider).toggleFavorite(item);
+              if (context.mounted) onChanged();
+            } catch (error) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(error.toString())),
+                );
+              }
+            }
           },
         ),
       ),

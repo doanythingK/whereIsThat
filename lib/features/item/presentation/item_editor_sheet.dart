@@ -41,6 +41,8 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
   String? _primaryPhotoId;
   final ImagePicker _imagePicker = ImagePicker();
   final List<Uint8List> _pendingPhotos = [];
+  late List<ItemPhoto> _existingPhotos;
+  Item? _persistedItem;
 
   @override
   void initState() {
@@ -64,6 +66,7 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
         .where((photo) => photo.isPrimary)
         .firstOrNull
         ?.id;
+    _existingPhotos = List<ItemPhoto>.from(item?.photos ?? const []);
   }
 
   @override
@@ -86,48 +89,91 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
       );
       return;
     }
+    final quantity = double.tryParse(_quantityController.text.trim());
+    if (quantity == null || !quantity.isFinite || quantity < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.l10n.invalidQuantity)),
+      );
+      return;
+    }
     setState(() => _saving = true);
     final now = DateTime.now().toUtc();
     final old = widget.item;
+    final persisted = _persistedItem;
+    final base = (persisted ?? old)?.copyWith(
+          photos: List<ItemPhoto>.from(_existingPhotos),
+        ) ??
+        Item(
+          id: '',
+          spaceId: widget.spaceId,
+          name: name,
+          createdBy:
+              ref.read(appRepositoryProvider).signedInUser?.id ?? 'demo-user',
+          createdAt: now,
+          updatedAt: now,
+          photos: const [],
+        );
+    final locationState = ref.read(
+      locationsForSpaceProvider(widget.spaceId),
+    );
+    final locationId = locationState.hasValue
+        ? (locationState.value ?? const <Location>[]).any(
+                (location) => location.id == _locationId,
+              )
+            ? _locationId
+            : null
+        : _locationId;
+    final categoryState = ref.read(categoriesProvider(widget.spaceId));
+    final categoryId = categoryState.hasValue
+        ? (categoryState.value ?? const <Category>[]).any(
+                (category) => category.id == _categoryId,
+              )
+            ? _categoryId
+            : null
+        : _categoryId;
     final item =
-        (old ??
-                Item(
-                  id: '',
-                  spaceId: widget.spaceId,
-                  name: name,
-                  createdBy:
-                      ref.read(appRepositoryProvider).signedInUser?.id ??
-                      'demo-user',
-                  createdAt: now,
-                  updatedAt: now,
-                  photos: const [],
-                ))
-            .copyWith(
-              name: name,
-              quantity: double.tryParse(_quantityController.text) ?? 1,
-              unit: _unitController.text.trim().isEmpty
-                  ? null
-                  : _unitController.text.trim(),
-              locationId: _locationId,
-              categoryId: _categoryId,
-              detailLocation: _detailController.text.trim().isEmpty
-                  ? null
-                  : _detailController.text.trim(),
-              memo: _memoController.text.trim().isEmpty
-                  ? null
-                  : _memoController.text.trim(),
-              visibility: _visibility,
-              ownerUserId: _visibility == 'private' ? _ownerUserId : null,
-            );
+        base.copyWith(
+          name: name,
+          quantity: quantity,
+          unit: _unitController.text.trim().isEmpty
+              ? null
+              : _unitController.text.trim(),
+          locationId: locationId,
+          categoryId: categoryId,
+          detailLocation: _detailController.text.trim().isEmpty
+              ? null
+              : _detailController.text.trim(),
+          memo: _memoController.text.trim().isEmpty
+              ? null
+              : _memoController.text.trim(),
+          visibility: _visibility,
+          ownerUserId: _visibility == 'private' ? _ownerUserId : null,
+        );
     try {
       var saved = await ref
           .read(workspaceActionsProvider)
-          .saveItem(item, isNew: old == null);
-      for (final bytes in _pendingPhotos) {
+          .saveItem(
+            item,
+            isNew: old == null && persisted == null,
+          );
+      saved = saved.copyWith(photos: List<ItemPhoto>.from(_existingPhotos));
+      _persistedItem = saved;
+      while (_pendingPhotos.isNotEmpty) {
+        final bytes = _pendingPhotos.first;
         final photo = await ref
             .read(workspaceActionsProvider)
             .uploadItemPhoto(item: saved, bytes: bytes, extension: 'jpg');
         saved = saved.copyWith(photos: [...saved.photos, photo]);
+        _persistedItem = saved;
+        if (mounted) {
+          setState(() {
+            _existingPhotos = [..._existingPhotos, photo];
+            _pendingPhotos.removeAt(0);
+          });
+        } else {
+          _existingPhotos = [..._existingPhotos, photo];
+          _pendingPhotos.removeAt(0);
+        }
       }
       if (mounted) Navigator.of(context).pop();
     } catch (error) {
@@ -162,23 +208,34 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
   }
 
   Future<void> _pickPhoto(ImageSource source) async {
-    final existingCount =
-        (widget.item?.photos.length ?? 0) + _pendingPhotos.length;
+    final existingCount = _existingPhotos.length + _pendingPhotos.length;
     if (existingCount >= 3) {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(context.l10n.photoLimit)));
       return;
     }
-    final image = await _imagePicker.pickImage(
-      source: source,
-      maxWidth: 1600,
-      maxHeight: 1600,
-      imageQuality: 85,
-    );
-    if (image == null) return;
-    final bytes = await image.readAsBytes();
-    if (!mounted) return;
-    setState(() => _pendingPhotos.add(bytes));
+    try {
+      final image = await _imagePicker.pickImage(
+        source: source,
+        maxWidth: 1600,
+        maxHeight: 1600,
+        imageQuality: 85,
+      );
+      if (image == null) return;
+      final bytes = await image.readAsBytes();
+      if (!mounted) return;
+      if (_existingPhotos.length + _pendingPhotos.length >= 3) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(context.l10n.photoLimit)));
+        return;
+      }
+      setState(() => _pendingPhotos.add(bytes));
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    }
   }
 
   Future<void> _createCategory(List<Category> categories) async {
@@ -222,12 +279,22 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
   @override
   Widget build(BuildContext context) {
     final locations = ref.watch(locationsForSpaceProvider(widget.spaceId));
-    final categories =
-        ref.watch(categoriesProvider(widget.spaceId)).value ??
-        const <Category>[];
-    final members =
-        ref.watch(spaceMembersProvider(widget.spaceId)).value ??
-        const <SpaceMember>[];
+    final categoriesState = ref.watch(categoriesProvider(widget.spaceId));
+    final categories = categoriesState.value ?? const <Category>[];
+    final locationValues =
+        locations.value ?? const <Location>[];
+    final selectedLocationId = locationValues.any(
+      (location) => location.id == _locationId,
+    )
+        ? _locationId
+        : null;
+    final selectedCategoryId = categories.any(
+      (category) => category.id == _categoryId,
+    )
+        ? _categoryId
+        : null;
+    final membersState = ref.watch(spaceMembersProvider(widget.spaceId));
+    final members = membersState.value ?? const <SpaceMember>[];
     final currentUserId = ref.read(appRepositoryProvider).signedInUser?.id;
     final currentMember = members
         .where((member) => member.userId == currentUserId)
@@ -235,6 +302,14 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
     final ownerMembers = currentMember?.role == 'admin'
         ? members
         : members.where((member) => member.userId == currentUserId).toList();
+    final selectionUnavailable =
+        (_locationId != null &&
+            (locations.isLoading || locations.hasError)) ||
+        (_categoryId != null &&
+            (categoriesState.isLoading || categoriesState.hasError)) ||
+        (_visibility == 'private' &&
+            _ownerUserId != null &&
+            (membersState.isLoading || membersState.hasError));
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.fromLTRB(
@@ -292,26 +367,24 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String?>(
-                initialValue: _locationId,
+                initialValue: selectedLocationId,
                 decoration: InputDecoration(labelText: context.l10n.location),
                 items: [
                   DropdownMenuItem<String?>(
                     value: null,
                     child: Text(context.l10n.unassignedLocation),
                   ),
-                  ...locations.value?.map(
-                        (location) => DropdownMenuItem<String?>(
-                          value: location.id,
-                          child: Text(location.name),
-                        ),
-                      ) ??
-                      const <DropdownMenuItem<String?>>[],
+                  for (final location in locationValues)
+                    DropdownMenuItem<String?>(
+                      value: location.id,
+                      child: Text(location.name),
+                    ),
                 ],
                 onChanged: (value) => setState(() => _locationId = value),
               ),
               const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                initialValue: _categoryId,
+              DropdownButtonFormField<String?>(
+                initialValue: selectedCategoryId,
                 decoration: InputDecoration(
                   labelText: context.l10n.categoryOptional,
                 ),
@@ -320,13 +393,12 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
                     value: null,
                     child: Text(context.l10n.none),
                   ),
-                  ...categories.map(
-                    (category) => DropdownMenuItem<String?>(
+                  for (final category in categories)
+                    DropdownMenuItem<String?>(
                       value: category.id,
                       child: Text(category.name),
                     ),
-                  ),
-                ].cast<DropdownMenuItem<String>>(),
+                ],
                 onChanged: (value) => setState(() => _categoryId = value),
               ),
               Align(
@@ -386,7 +458,7 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
               ),
               const SizedBox(height: 12),
               _PhotoSection(
-                item: widget.item,
+                existingPhotos: _existingPhotos,
                 pendingPhotos: _pendingPhotos,
                 onPickCamera: () => _pickPhoto(ImageSource.camera),
                 onPickGallery: () => _pickPhoto(ImageSource.gallery),
@@ -394,18 +466,61 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
                     setState(() => _pendingPhotos.removeAt(index)),
                 onDeleteExisting: (photo) async {
                   if (widget.item == null) return;
-                  await ref
-                      .read(workspaceActionsProvider)
-                      .deleteItemPhoto(widget.item!, photo);
-                  if (mounted) setState(() {});
+                  final current = widget.item!.copyWith(
+                    photos: List<ItemPhoto>.from(_existingPhotos),
+                  );
+                  try {
+                    await ref
+                        .read(workspaceActionsProvider)
+                        .deleteItemPhoto(current, photo);
+                    if (!mounted) return;
+                    setState(() {
+                      _existingPhotos = _existingPhotos
+                          .where((entry) => entry.id != photo.id)
+                          .toList();
+                      if (_primaryPhotoId == photo.id) {
+                        _primaryPhotoId = _existingPhotos
+                            .where((entry) => entry.isPrimary)
+                            .firstOrNull
+                            ?.id;
+                      }
+                    });
+                  } catch (error) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text(error.toString())),
+                      );
+                    }
+                  }
                 },
                 primaryPhotoId: _primaryPhotoId,
                 onSetPrimary: (photo) async {
                   if (widget.item == null) return;
-                  await ref
-                      .read(workspaceActionsProvider)
-                      .setPrimaryItemPhoto(widget.item!, photo);
-                  if (mounted) setState(() => _primaryPhotoId = photo.id);
+                  final current = widget.item!.copyWith(
+                    photos: List<ItemPhoto>.from(_existingPhotos),
+                  );
+                  try {
+                    await ref
+                        .read(workspaceActionsProvider)
+                        .setPrimaryItemPhoto(current, photo);
+                    if (!mounted) return;
+                    setState(() {
+                      _primaryPhotoId = photo.id;
+                      _existingPhotos = _existingPhotos
+                          .map(
+                            (entry) => entry.copyWith(
+                              isPrimary: entry.id == photo.id,
+                            ),
+                          )
+                          .toList();
+                    });
+                  } catch (error) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text(error.toString())),
+                      );
+                    }
+                  }
                 },
               ),
               const SizedBox(height: 12),
@@ -417,7 +532,7 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
               ),
               const SizedBox(height: 12),
               FilledButton.icon(
-                onPressed: _saving ? null : _save,
+                onPressed: _saving || selectionUnavailable ? null : _save,
                 icon: _saving
                     ? const SizedBox(
                         width: 18,
@@ -437,7 +552,7 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
 
 class _PhotoSection extends StatelessWidget {
   const _PhotoSection({
-    required this.item,
+    required this.existingPhotos,
     required this.pendingPhotos,
     required this.onPickCamera,
     required this.onPickGallery,
@@ -447,7 +562,7 @@ class _PhotoSection extends StatelessWidget {
     required this.onSetPrimary,
   });
 
-  final Item? item;
+  final List<ItemPhoto> existingPhotos;
   final List<Uint8List> pendingPhotos;
   final VoidCallback onPickCamera;
   final VoidCallback onPickGallery;
@@ -458,7 +573,7 @@ class _PhotoSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final photos = item?.photos ?? const <ItemPhoto>[];
+    final photos = existingPhotos;
     final total = photos.length + pendingPhotos.length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

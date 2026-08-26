@@ -140,8 +140,12 @@ class SpacePickerPage extends ConsumerWidget {
           IconButton(
             tooltip: context.l10n.signOut,
             onPressed: () async {
-              await ref.read(authActionsProvider).signOut();
-              if (context.mounted) context.go('/auth');
+              try {
+                await ref.read(authActionsProvider).signOut();
+                if (context.mounted) context.go('/auth');
+              } catch (error) {
+                if (context.mounted) _showError(context, error.toString());
+              }
             },
             icon: const Icon(Icons.logout),
           ),
@@ -201,7 +205,13 @@ class SpacePickerPage extends ConsumerWidget {
   }
 
   Future<void> _showDeletedSpaces(BuildContext context, WidgetRef ref) async {
-    final spaces = await ref.read(deletedSpacesProvider.future);
+    late List<Space> spaces;
+    try {
+      spaces = await ref.read(deletedSpacesProvider.future);
+    } catch (error) {
+      if (context.mounted) _showError(context, error.toString());
+      return;
+    }
     if (!context.mounted) return;
     await showModalBottomSheet<void>(
       context: context,
@@ -227,9 +237,20 @@ class SpacePickerPage extends ConsumerWidget {
                       trailing: IconButton(
                         tooltip: context.l10n.restore,
                         icon: const Icon(Icons.restore),
-                        onPressed: () => ref
-                            .read(workspaceActionsProvider)
-                            .restoreSpace(space),
+                        onPressed: () async {
+                          try {
+                            await ref
+                                .read(workspaceActionsProvider)
+                                .restoreSpace(space);
+                            if (context.mounted) Navigator.pop(context);
+                          } catch (error) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(error.toString())),
+                              );
+                            }
+                          }
+                        },
                       ),
                     ),
                 ],
@@ -250,8 +271,16 @@ class _SpaceCard extends ConsumerWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(18),
         onTap: () async {
-          await ref.read(workspaceActionsProvider).accessSpace(space.id);
-          if (context.mounted) context.go('/space/${space.id}/home');
+          try {
+            await ref.read(workspaceActionsProvider).accessSpace(space.id);
+            if (context.mounted) context.go('/space/${space.id}/home');
+          } catch (error) {
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(error.toString())),
+              );
+            }
+          }
         },
         child: Padding(
           padding: const EdgeInsets.all(18),

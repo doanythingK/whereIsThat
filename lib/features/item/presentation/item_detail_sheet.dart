@@ -22,6 +22,8 @@ class ItemDetailSheet extends ConsumerWidget {
     final location = locations
         .where((entry) => entry.id == item.locationId)
         .firstOrNull;
+    var isFavorite = item.isFavorite;
+    var savingFavorite = false;
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
@@ -58,10 +60,39 @@ class ItemDetailSheet extends ConsumerWidget {
                 subtitle: Text(
                   location?.name ?? context.l10n.unassignedLocation,
                 ),
-                trailing: IconButton(
-                  icon: Icon(item.isFavorite ? Icons.star : Icons.star_border),
-                  onPressed: () =>
-                      ref.read(workspaceActionsProvider).toggleFavorite(item),
+                trailing: StatefulBuilder(
+                  builder: (context, setState) => IconButton(
+                    icon: Icon(
+                      isFavorite ? Icons.star : Icons.star_border,
+                    ),
+                    onPressed: savingFavorite
+                        ? null
+                        : () async {
+                            final previous = isFavorite;
+                            setState(() {
+                              savingFavorite = true;
+                              isFavorite = !previous;
+                            });
+                            try {
+                              await ref
+                                  .read(workspaceActionsProvider)
+                                  .toggleFavorite(
+                                    item.copyWith(isFavorite: previous),
+                                  );
+                            } catch (error) {
+                              if (context.mounted) {
+                                setState(() => isFavorite = previous);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text(error.toString())),
+                                );
+                              }
+                            } finally {
+                              if (context.mounted) {
+                                setState(() => savingFavorite = false);
+                              }
+                            }
+                          },
+                  ),
                 ),
               ),
               if (item.photos.isNotEmpty) ...[
@@ -93,9 +124,13 @@ class ItemDetailSheet extends ConsumerWidget {
               const SizedBox(height: 8),
               if (item.locationId != null)
                 OutlinedButton.icon(
-                  onPressed: () => context.go(
-                    '/space/${item.spaceId}/floor-plan?location=${Uri.encodeQueryComponent(item.locationId!)}',
-                  ),
+                  onPressed: () {
+                    final router = GoRouter.of(context);
+                    final path =
+                        '/space/${item.spaceId}/floor-plan?location=${Uri.encodeQueryComponent(item.locationId!)}';
+                    Navigator.of(context).pop();
+                    router.go(path);
+                  },
                   icon: const Icon(Icons.map_outlined),
                   label: Text(context.l10n.showOnFloorPlan),
                 ),
@@ -198,13 +233,19 @@ class _MoveDialog extends ConsumerStatefulWidget {
 
 class _MoveDialogState extends ConsumerState<_MoveDialog> {
   late String _spaceId = widget.item.spaceId;
-  String? _locationId;
+  late String? _locationId = widget.item.locationId;
 
   @override
   Widget build(BuildContext context) {
-    final locations =
-        ref.watch(locationsForSpaceProvider(_spaceId)).value ??
-        const <Location>[];
+    final locationState = ref.watch(locationsForSpaceProvider(_spaceId));
+    final locations = locationState.value ?? const <Location>[];
+    final selectedLocationId = locations.any(
+      (location) => location.id == _locationId,
+    )
+        ? _locationId
+        : null;
+    final locationsUnavailable =
+        locationState.isLoading || locationState.hasError;
     return AlertDialog(
       title: Text(context.l10n.chooseMoveLocation),
       content: Column(
@@ -223,8 +264,20 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
             }),
           ),
           const SizedBox(height: 12),
+          if (locationState.isLoading) const LinearProgressIndicator(),
+          if (locationState.hasError)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  context.l10n.errorTitle,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+            ),
           DropdownButtonFormField<String?>(
-            initialValue: _locationId,
+            initialValue: selectedLocationId,
             decoration: InputDecoration(labelText: context.l10n.location),
             items: [
               DropdownMenuItem<String?>(
@@ -237,7 +290,9 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
                   child: Text(location.name),
                 ),
             ],
-            onChanged: (value) => setState(() => _locationId = value),
+            onChanged: locationsUnavailable
+                ? null
+                : (value) => setState(() => _locationId = value),
           ),
         ],
       ),
@@ -247,10 +302,12 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
           child: Text(context.l10n.cancel),
         ),
         FilledButton(
-          onPressed: () => Navigator.pop(context, (
-            spaceId: _spaceId,
-            locationId: _locationId,
-          )),
+          onPressed: locationsUnavailable
+              ? null
+              : () => Navigator.pop(context, (
+                  spaceId: _spaceId,
+                  locationId: selectedLocationId,
+                )),
           child: Text(context.l10n.save),
         ),
       ],

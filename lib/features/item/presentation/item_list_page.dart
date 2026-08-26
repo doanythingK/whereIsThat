@@ -40,6 +40,7 @@ class _ItemListPageState extends ConsumerState<ItemListPage> {
       isScrollControlled: true,
       builder: (_) => ItemEditorSheet(spaceId: widget.spaceId, item: item),
     );
+    if (!mounted) return;
     ref.invalidate(itemsProvider((spaceId: widget.spaceId, search: _query)));
   }
 
@@ -104,6 +105,12 @@ class _ItemListPageState extends ConsumerState<ItemListPage> {
                         itemBuilder: (context, index) => _ItemTile(
                           item: values[index],
                           onEdit: () => _edit(values[index]),
+                          onChanged: () => ref.invalidate(
+                            itemsProvider((
+                              spaceId: widget.spaceId,
+                              search: _query,
+                            )),
+                          ),
                         ),
                       ),
                     ),
@@ -116,20 +123,28 @@ class _ItemListPageState extends ConsumerState<ItemListPage> {
 }
 
 class _ItemTile extends ConsumerWidget {
-  const _ItemTile({required this.item, required this.onEdit});
+  const _ItemTile({
+    required this.item,
+    required this.onEdit,
+    required this.onChanged,
+  });
 
   final Item item;
   final VoidCallback onEdit;
+  final VoidCallback onChanged;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Card(
       child: ListTile(
-        onTap: () => showModalBottomSheet<void>(
-          context: context,
-          isScrollControlled: true,
-          builder: (_) => ItemDetailSheet(item: item),
-        ),
+        onTap: () async {
+          await showModalBottomSheet<void>(
+            context: context,
+            isScrollControlled: true,
+            builder: (_) => ItemDetailSheet(item: item),
+          );
+          if (context.mounted) onChanged();
+        },
         onLongPress: onEdit,
         leading: CircleAvatar(
           child: Icon(
@@ -144,16 +159,22 @@ class _ItemTile extends ConsumerWidget {
         ),
         trailing: PopupMenuButton<String>(
           onSelected: (value) async {
-            if (value == 'favorite') {
-              await ref.read(workspaceActionsProvider).toggleFavorite(item);
-            }
-            if (value == 'delete') {
-              await ref.read(workspaceActionsProvider).deleteItem(item);
-            }
-            if (context.mounted) {
-              ref.invalidate(
-                itemsProvider((spaceId: item.spaceId, search: null)),
-              );
+            try {
+              if (value == 'favorite') {
+                await ref.read(workspaceActionsProvider).toggleFavorite(item);
+              }
+              if (value == 'delete') {
+                await ref.read(workspaceActionsProvider).deleteItem(item);
+              }
+              if (context.mounted) {
+                onChanged();
+              }
+            } catch (error) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(error.toString())),
+                );
+              }
             }
           },
           itemBuilder: (context) => [

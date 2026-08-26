@@ -9,6 +9,12 @@ void main() {
     final hardeningSql = File(
       'supabase/migrations/202608240001_mvp_hardening.sql',
     ).readAsStringSync();
+    final checklistRlsSql = File(
+      'supabase/migrations/202608250001_checklist_member_check_rls.sql',
+    ).readAsStringSync();
+    final stabilizationSql = File(
+      'supabase/migrations/202608260001_stabilization.sql',
+    ).readAsStringSync();
 
     expect(sql, contains('alter table public.items enable row level security'));
     expect(sql, contains('item_visibility_select'));
@@ -37,5 +43,15 @@ void main() {
     expect(hardeningSql, contains('notification_events'));
     expect(hardeningSql, contains('item_photo_storage_select'));
     expect(hardeningSql, isNot(contains('SUPABASE_SERVICE_ROLE_KEY')));
+    expect(checklistRlsSql, contains('checklist_member_check_select'));
+    expect(checklistRlsSql, contains('checklist_member_check_update'));
+    expect(checklistRlsSql, contains('checklist_member_check_delete'));
+    expect(stabilizationSql, contains('soft_delete_floor_plan'));
+    expect(stabilizationSql, contains('deleted_at = deletion_at'));
+    expect(stabilizationSql, contains('floor_plan_deleted'));
+    expect(stabilizationSql, contains('version = version + 1'));
+    expect(stabilizationSql, contains('target_visibility = \'shared\''));
+    expect(stabilizationSql, contains('recovered_at is null'));
+    expect(stabilizationSql, contains('recovered_at is not null'));
   });
 }

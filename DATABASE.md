@@ -374,6 +374,10 @@ unique:
 
 Realtime 대상.
 
+RLS:
+- shared checklist의 active space member는 모든 member check를 조회할 수 있다.
+- member check의 INSERT/UPDATE/DELETE는 해당 `user_id = auth.uid()`인 행만 허용한다.
+
 ---
 
 ## 8. 식재료 / 기한 (출시 후)
@@ -664,3 +668,14 @@ WHERE id = :id
 - prod Dashboard에서 수동 테이블 구조 수정 금지 원칙
 - RLS 변경도 migration에 포함
 - seed/system categories/system checklist templates는 별도 seed script로 관리
+
+### 안정화 migration
+
+`202608260001_stabilization.sql`은 다음 무결성 문제를 보정한다.
+
+- 평면도 삭제 시 하위 Location을 먼저 soft delete하여 active FloorPlan 검증 트리거와 충돌하지 않게 한다.
+- 평면도 복구 시 해당 평면도 삭제 작업에서 함께 삭제된 Location만 복구한다.
+- Item 복구 시 권한을 확인하고, 이미 삭제된 Location은 위치 미지정으로 복구한다.
+- 체크리스트 구성원 체크의 조회/삭제도 상위 체크리스트 접근 권한을 함께 확인한다.
+
+마이그레이션 적용 후에는 평면도·위치·물건 삭제/복구와 공유 체크리스트 권한을 dev 환경에서 검증해야 한다.

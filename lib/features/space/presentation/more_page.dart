@@ -16,8 +16,26 @@ class MorePage extends ConsumerWidget {
 
   final String spaceId;
 
+  void _closeSheetAndGo(BuildContext context, String location) {
+    final router = GoRouter.of(context);
+    Navigator.of(context).pop();
+    router.go(location);
+  }
+
+  void _showError(BuildContext context, Object error) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(error.toString())));
+  }
+
   Future<void> _invite(BuildContext context, WidgetRef ref) async {
-    var invites = await ref.read(invitesProvider(spaceId).future);
+    late List<SpaceInvite> invites;
+    try {
+      invites = await ref.read(invitesProvider(spaceId).future);
+    } catch (error) {
+      _showError(context, error);
+      return;
+    }
     if (!context.mounted) return;
     await showDialog<void>(
       context: context,
@@ -78,23 +96,29 @@ class MorePage extends ConsumerWidget {
                                           invite.expiresAt.isBefore(now)
                                       ? null
                                       : () async {
-                                          await ref
-                                              .read(workspaceActionsProvider)
-                                              .revokeInvite(invite);
-                                          setDialogState(
-                                            () => invites = invites
-                                                .map(
-                                                  (entry) =>
-                                                      entry.id == invite.id
-                                                      ? entry.copyWith(
-                                                          revokedAt:
-                                                              DateTime.now()
-                                                                  .toUtc(),
-                                                        )
-                                                      : entry,
-                                                )
-                                                .toList(),
-                                          );
+                                          try {
+                                            await ref
+                                                .read(workspaceActionsProvider)
+                                                .revokeInvite(invite);
+                                            if (context.mounted) {
+                                              setDialogState(
+                                                () => invites = invites
+                                                    .map(
+                                                      (entry) =>
+                                                          entry.id == invite.id
+                                                          ? entry.copyWith(
+                                                              revokedAt:
+                                                                  DateTime.now()
+                                                                      .toUtc(),
+                                                            )
+                                                          : entry,
+                                                    )
+                                                    .toList(),
+                                              );
+                                            }
+                                          } catch (error) {
+                                            _showError(context, error);
+                                          }
                                         },
                                 ),
                               ],
@@ -110,10 +134,16 @@ class MorePage extends ConsumerWidget {
               ),
               FilledButton.icon(
                 onPressed: () async {
-                  final created = await ref
-                      .read(workspaceActionsProvider)
-                      .createInvite(spaceId);
-                  setDialogState(() => invites = [created, ...invites]);
+                  try {
+                    final created = await ref
+                        .read(workspaceActionsProvider)
+                        .createInvite(spaceId);
+                    if (context.mounted) {
+                      setDialogState(() => invites = [created, ...invites]);
+                    }
+                  } catch (error) {
+                    _showError(context, error);
+                  }
                 },
                 icon: const Icon(Icons.add_link),
                 label: Text(context.l10n.add),
@@ -195,8 +225,14 @@ class MorePage extends ConsumerWidget {
   }
 
   Future<void> _showMembers(BuildContext context, WidgetRef ref) async {
-    final members = await ref.read(spaceMembersProvider(spaceId).future);
-    final currentUser = ref.read(currentUserProvider).value;
+    late List<SpaceMember> members;
+    try {
+      members = await ref.read(spaceMembersProvider(spaceId).future);
+    } catch (error) {
+      _showError(context, error);
+      return;
+    }
+    final currentUser = ref.read(appRepositoryProvider).signedInUser;
     final currentMember = members
         .where((member) => member.userId == currentUser?.id)
         .firstOrNull;
@@ -204,50 +240,96 @@ class MorePage extends ConsumerWidget {
     if (!context.mounted) return;
     await showModalBottomSheet<void>(
       context: context,
-      builder: (context) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            for (final member in members)
-              ListTile(
-                leading: const CircleAvatar(child: Icon(Icons.person)),
-                title: Text(member.displayName ?? member.userId),
-                subtitle: Text(member.role),
-                onTap: member.userId == currentUser?.id
-                    ? () => _editDisplayName(context, ref, member)
-                    : null,
-                trailing: canManage && member.userId != currentUser?.id
-                    ? PopupMenuButton<String>(
-                        onSelected: (role) async {
-                          await ref
-                              .read(workspaceActionsProvider)
-                              .updateMemberRole(member, role);
-                        },
-                        itemBuilder: (context) => [
-                          PopupMenuItem(
-                            value: member.role == 'admin' ? 'member' : 'admin',
-                            child: Text(
-                              member.role == 'admin'
-                                  ? context.l10n.demoteMember
-                                  : context.l10n.promoteAdmin,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              for (final member in members)
+                ListTile(
+                  leading: const CircleAvatar(child: Icon(Icons.person)),
+                  title: Text(member.displayName ?? member.userId),
+                  subtitle: Text(member.role),
+                  onTap: member.userId == currentUser?.id
+                      ? () async {
+                          final displayName = await _editDisplayName(
+                            context,
+                            ref,
+                            member,
+                          );
+                          if (displayName == null || !context.mounted) return;
+                          setModalState(() {
+                            members = members
+                                .map(
+                                  (entry) => entry.id == member.id
+                                      ? entry.copyWith(
+                                          displayName: displayName,
+                                        )
+                                      : entry,
+                                )
+                                .toList();
+                          });
+                        }
+                      : null,
+                  trailing: canManage && member.userId != currentUser?.id
+                      ? PopupMenuButton<String>(
+                          onSelected: (role) async {
+                            try {
+                              await ref
+                                  .read(workspaceActionsProvider)
+                                  .updateMemberRole(member, role);
+                              if (!context.mounted) return;
+                              setModalState(() {
+                                members = members
+                                    .map(
+                                      (entry) => entry.id == member.id
+                                          ? entry.copyWith(role: role)
+                                          : entry,
+                                    )
+                                    .toList();
+                              });
+                            } catch (error) {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text(error.toString())),
+                                );
+                              }
+                            }
+                          },
+                          itemBuilder: (context) => [
+                            PopupMenuItem(
+                              value: member.role == 'admin'
+                                  ? 'member'
+                                  : 'admin',
+                              child: Text(
+                                member.role == 'admin'
+                                    ? context.l10n.demoteMember
+                                    : context.l10n.promoteAdmin,
+                              ),
                             ),
-                          ),
-                        ],
-                      )
-                    : null,
-              ),
-          ],
+                          ],
+                        )
+                      : null,
+                ),
+            ],
+          ),
         ),
       ),
     );
   }
 
   Future<void> _showTrash(BuildContext context, WidgetRef ref) async {
-    final results = await Future.wait([
-      ref.read(deletedItemsProvider(spaceId).future),
-      ref.read(deletedFloorPlansProvider(spaceId).future),
-      ref.read(deletedLocationsProvider(spaceId).future),
-    ]);
+    late List<Object?> results;
+    try {
+      results = await Future.wait<Object?>([
+        ref.read(deletedItemsProvider(spaceId).future),
+        ref.read(deletedFloorPlansProvider(spaceId).future),
+        ref.read(deletedLocationsProvider(spaceId).future),
+      ]);
+    } catch (error) {
+      _showError(context, error);
+      return;
+    }
     if (!context.mounted) return;
     final items = results[0] as List<Item>;
     final plans = results[1] as List<FloorPlan>;
@@ -281,8 +363,20 @@ class MorePage extends ConsumerWidget {
                   trailing: IconButton(
                     tooltip: context.l10n.restore,
                     icon: const Icon(Icons.restore),
-                    onPressed: () =>
-                        ref.read(workspaceActionsProvider).restoreItem(item),
+                    onPressed: () async {
+                      try {
+                        await ref
+                            .read(workspaceActionsProvider)
+                            .restoreItem(item);
+                        if (context.mounted) Navigator.pop(context);
+                      } catch (error) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(error.toString())),
+                          );
+                        }
+                      }
+                    },
                   ),
                 ),
               for (final plan in plans)
@@ -298,9 +392,20 @@ class MorePage extends ConsumerWidget {
                   trailing: IconButton(
                     tooltip: context.l10n.restore,
                     icon: const Icon(Icons.restore),
-                    onPressed: () => ref
-                        .read(workspaceActionsProvider)
-                        .restoreFloorPlan(plan),
+                    onPressed: () async {
+                      try {
+                        await ref
+                            .read(workspaceActionsProvider)
+                            .restoreFloorPlan(plan);
+                        if (context.mounted) Navigator.pop(context);
+                      } catch (error) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(error.toString())),
+                          );
+                        }
+                      }
+                    },
                   ),
                 ),
               for (final location in locations)
@@ -316,9 +421,20 @@ class MorePage extends ConsumerWidget {
                   trailing: IconButton(
                     tooltip: context.l10n.restore,
                     icon: const Icon(Icons.restore),
-                    onPressed: () => ref
-                        .read(workspaceActionsProvider)
-                        .restoreLocation(location),
+                    onPressed: () async {
+                      try {
+                        await ref
+                            .read(workspaceActionsProvider)
+                            .restoreLocation(location);
+                        if (context.mounted) Navigator.pop(context);
+                      } catch (error) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(error.toString())),
+                          );
+                        }
+                      }
+                    },
                   ),
                 ),
             ],
@@ -329,7 +445,13 @@ class MorePage extends ConsumerWidget {
   }
 
   Future<void> _showNotices(BuildContext context, WidgetRef ref) async {
-    final notices = await ref.read(noticesProvider.future);
+    late List<AppNotice> notices;
+    try {
+      notices = await ref.read(noticesProvider.future);
+    } catch (error) {
+      _showError(context, error);
+      return;
+    }
     if (!context.mounted) return;
     await showModalBottomSheet<void>(
       context: context,
@@ -358,7 +480,7 @@ class MorePage extends ConsumerWidget {
     );
   }
 
-  Future<void> _editDisplayName(
+  Future<String?> _editDisplayName(
     BuildContext context,
     WidgetRef ref,
     SpaceMember member,
@@ -387,10 +509,21 @@ class MorePage extends ConsumerWidget {
       ),
     );
     controller.dispose();
-    if (displayName == null || displayName.isEmpty) return;
-    await ref
-        .read(workspaceActionsProvider)
-        .updateMemberDisplayName(member, displayName);
+    if (displayName == null || displayName.isEmpty || !context.mounted) {
+      return null;
+    }
+    try {
+      await ref
+          .read(workspaceActionsProvider)
+          .updateMemberDisplayName(member, displayName);
+      return displayName;
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+      return null;
+    }
   }
 
   Future<void> _showSettings(BuildContext context, WidgetRef ref) async {
@@ -430,8 +563,12 @@ class MorePage extends ConsumerWidget {
                     final next = value.first;
                     setState(() => themeMode = next);
                     ref.read(themeModeProvider.notifier).setMode(next);
-                    final prefs = await SharedPreferences.getInstance();
-                    await prefs.setString('theme_mode', next.name);
+                    try {
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setString('theme_mode', next.name);
+                    } catch (error) {
+                      _showError(context, error);
+                    }
                   },
                 ),
               ),
@@ -439,8 +576,12 @@ class MorePage extends ConsumerWidget {
                 leading: const Icon(Icons.logout),
                 title: Text(context.l10n.signOut),
                 onTap: () async {
-                  await ref.read(authActionsProvider).signOut();
-                  if (context.mounted) context.go('/auth');
+                  try {
+                    await ref.read(authActionsProvider).signOut();
+                    if (context.mounted) _closeSheetAndGo(context, '/auth');
+                  } catch (error) {
+                    _showError(context, error);
+                  }
                 },
               ),
               ListTile(
@@ -451,7 +592,7 @@ class MorePage extends ConsumerWidget {
               ListTile(
                 leading: const Icon(Icons.swap_horiz),
                 title: Text(context.l10n.spaces),
-                onTap: () => context.go('/spaces'),
+                onTap: () => _closeSheetAndGo(context, '/spaces'),
               ),
               ListTile(
                 leading: const Icon(Icons.exit_to_app),
@@ -568,7 +709,7 @@ class MorePage extends ConsumerWidget {
             personalDataAction: choice.action,
             targetSpaceId: choice.targetSpaceId,
           );
-      if (context.mounted) context.go('/spaces');
+      if (context.mounted) _closeSheetAndGo(context, '/spaces');
     } catch (error) {
       if (context.mounted) {
         ScaffoldMessenger.of(context)
@@ -612,8 +753,12 @@ class MorePage extends ConsumerWidget {
     );
     controller.dispose();
     if (confirmed != true) return;
-    await ref.read(workspaceActionsProvider).deleteSpace(space);
-    if (context.mounted) context.go('/spaces');
+    try {
+      await ref.read(workspaceActionsProvider).deleteSpace(space);
+      if (context.mounted) _closeSheetAndGo(context, '/spaces');
+    } catch (error) {
+      _showError(context, error);
+    }
   }
 
   Future<void> _deleteAccount(BuildContext context, WidgetRef ref) async {
@@ -635,8 +780,12 @@ class MorePage extends ConsumerWidget {
       ),
     );
     if (confirmed != true) return;
-    await ref.read(authActionsProvider).deleteAccount();
-    if (context.mounted) context.go('/account-recovery');
+    try {
+      await ref.read(authActionsProvider).deleteAccount();
+      if (context.mounted) _closeSheetAndGo(context, '/account-recovery');
+    } catch (error) {
+      _showError(context, error);
+    }
   }
 
   Future<void> _showIdentityLinks(BuildContext context, WidgetRef ref) async {
@@ -658,8 +807,14 @@ class MorePage extends ConsumerWidget {
                   ),
                 ),
                 onTap: () async {
-                  await ref.read(authActionsProvider).linkIdentity(entry.$1);
-                  if (context.mounted) Navigator.pop(context);
+                  try {
+                    await ref
+                        .read(authActionsProvider)
+                        .linkIdentity(entry.$1);
+                    if (context.mounted) Navigator.pop(context);
+                  } catch (error) {
+                    _showError(context, error);
+                  }
                 },
               ),
           ],

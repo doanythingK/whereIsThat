@@ -47,7 +47,7 @@ Service Role Key, DB 비밀번호, FCM 서버 키, 스토어 키는 앱이나 �
 
 ## Supabase
 
-`supabase/migrations/202608230001_mvp.sql`을 dev 프로젝트에 먼저 적용하고, 이미 적용한 환경에는 이어서 `supabase/migrations/202608240001_mvp_hardening.sql`도 적용한 뒤 RLS와 OAuth provider 설정을 확인합니다. 운영 프로젝트에는 dev 검증 후 같은 migration 순서를 승격합니다.
+`supabase/migrations/202608230001_mvp.sql`을 dev 프로젝트에 먼저 적용하고, 이미 적용한 환경에는 이어서 `202608240001_mvp_hardening.sql`, `202608250001_checklist_member_check_rls.sql`, `202608260001_stabilization.sql` 순서로 적용한 뒤 RLS와 OAuth provider 설정을 확인합니다. 운영 프로젝트에는 dev 검증 후 같은 migration 순서를 승격합니다.
 
 30일 Soft Delete purge는 `supabase/functions/purge_deleted_data` Edge Function을 Supabase Cron에서 하루 한 번 호출하도록 설정합니다. Edge Function에만 `SUPABASE_SERVICE_ROLE_KEY`를 secret으로 등록합니다.
 
