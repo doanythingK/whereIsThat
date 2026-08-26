@@ -522,7 +522,7 @@ class _FloorPlanPageState extends ConsumerState<FloorPlanPage> {
       focusedLocationsState = ref.watch(
         locationsForSpaceProvider(widget.spaceId),
       );
-      final allLocations = focusedLocationsState.value ?? const <Location>[];
+      final allLocations = focusedLocationsState?.value ?? const <Location>[];
       focusedLocation = allLocations
           .where((location) => location.id == widget.focusLocationId)
           .firstOrNull;

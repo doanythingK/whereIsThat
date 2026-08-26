@@ -476,7 +476,7 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
                       }
                     });
                   } catch (error) {
-                    if (mounted) {
+                    if (context.mounted) {
                       ScaffoldMessenger.of(
                         context,
                       ).showSnackBar(SnackBar(content: Text(error.toString())));
@@ -504,7 +504,7 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
                           .toList();
                     });
                   } catch (error) {
-                    if (mounted) {
+                    if (context.mounted) {
                       ScaffoldMessenger.of(
                         context,
                       ).showSnackBar(SnackBar(content: Text(error.toString())));

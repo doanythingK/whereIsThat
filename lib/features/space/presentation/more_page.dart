@@ -33,7 +33,7 @@ class MorePage extends ConsumerWidget {
     try {
       invites = await ref.read(invitesProvider(spaceId).future);
     } catch (error) {
-      _showError(context, error);
+      if (context.mounted) _showError(context, error);
       return;
     }
     if (!context.mounted) return;
@@ -117,7 +117,9 @@ class MorePage extends ConsumerWidget {
                                               );
                                             }
                                           } catch (error) {
-                                            _showError(context, error);
+                                            if (context.mounted) {
+                                              _showError(context, error);
+                                            }
                                           }
                                         },
                                 ),
@@ -142,7 +144,7 @@ class MorePage extends ConsumerWidget {
                       setDialogState(() => invites = [created, ...invites]);
                     }
                   } catch (error) {
-                    _showError(context, error);
+                    if (context.mounted) _showError(context, error);
                   }
                 },
                 icon: const Icon(Icons.add_link),
@@ -229,7 +231,7 @@ class MorePage extends ConsumerWidget {
     try {
       members = await ref.read(spaceMembersProvider(spaceId).future);
     } catch (error) {
-      _showError(context, error);
+      if (context.mounted) _showError(context, error);
       return;
     }
     final currentUser = ref.read(appRepositoryProvider).signedInUser;
@@ -325,7 +327,7 @@ class MorePage extends ConsumerWidget {
         ref.read(deletedLocationsProvider(spaceId).future),
       ]);
     } catch (error) {
-      _showError(context, error);
+      if (context.mounted) _showError(context, error);
       return;
     }
     if (!context.mounted) return;
@@ -447,7 +449,7 @@ class MorePage extends ConsumerWidget {
     try {
       notices = await ref.read(noticesProvider.future);
     } catch (error) {
-      _showError(context, error);
+      if (context.mounted) _showError(context, error);
       return;
     }
     if (!context.mounted) return;
@@ -565,7 +567,7 @@ class MorePage extends ConsumerWidget {
                       final prefs = await SharedPreferences.getInstance();
                       await prefs.setString('theme_mode', next.name);
                     } catch (error) {
-                      _showError(context, error);
+                      if (context.mounted) _showError(context, error);
                     }
                   },
                 ),
@@ -578,7 +580,7 @@ class MorePage extends ConsumerWidget {
                     await ref.read(authActionsProvider).signOut();
                     if (context.mounted) _closeSheetAndGo(context, '/auth');
                   } catch (error) {
-                    _showError(context, error);
+                    if (context.mounted) _showError(context, error);
                   }
                 },
               ),
@@ -755,7 +757,7 @@ class MorePage extends ConsumerWidget {
       await ref.read(workspaceActionsProvider).deleteSpace(space);
       if (context.mounted) _closeSheetAndGo(context, '/spaces');
     } catch (error) {
-      _showError(context, error);
+      if (context.mounted) _showError(context, error);
     }
   }
 
@@ -782,7 +784,7 @@ class MorePage extends ConsumerWidget {
       await ref.read(authActionsProvider).deleteAccount();
       if (context.mounted) _closeSheetAndGo(context, '/account-recovery');
     } catch (error) {
-      _showError(context, error);
+      if (context.mounted) _showError(context, error);
     }
   }
 
@@ -809,7 +811,7 @@ class MorePage extends ConsumerWidget {
                     await ref.read(authActionsProvider).linkIdentity(entry.$1);
                     if (context.mounted) Navigator.pop(context);
                   } catch (error) {
-                    _showError(context, error);
+                    if (context.mounted) _showError(context, error);
                   }
                 },
               ),
