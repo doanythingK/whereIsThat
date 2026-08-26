@@ -62,9 +62,7 @@ class ItemDetailSheet extends ConsumerWidget {
                 ),
                 trailing: StatefulBuilder(
                   builder: (context, setState) => IconButton(
-                    icon: Icon(
-                      isFavorite ? Icons.star : Icons.star_border,
-                    ),
+                    icon: Icon(isFavorite ? Icons.star : Icons.star_border),
                     onPressed: savingFavorite
                         ? null
                         : () async {
@@ -239,9 +237,8 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
   Widget build(BuildContext context) {
     final locationState = ref.watch(locationsForSpaceProvider(_spaceId));
     final locations = locationState.value ?? const <Location>[];
-    final selectedLocationId = locations.any(
-      (location) => location.id == _locationId,
-    )
+    final selectedLocationId =
+        locations.any((location) => location.id == _locationId)
         ? _locationId
         : null;
     final locationsUnavailable =

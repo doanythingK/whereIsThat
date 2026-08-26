@@ -276,9 +276,8 @@ class _SpaceCard extends ConsumerWidget {
             if (context.mounted) context.go('/space/${space.id}/home');
           } catch (error) {
             if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(error.toString())),
-              );
+              ScaffoldMessenger.of(context)
+                  .showSnackBar(SnackBar(content: Text(error.toString())));
             }
           }
         },

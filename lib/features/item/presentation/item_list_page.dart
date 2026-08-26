@@ -171,9 +171,8 @@ class _ItemTile extends ConsumerWidget {
               }
             } catch (error) {
               if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(error.toString())),
-                );
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(SnackBar(content: Text(error.toString())));
               }
             }
           },

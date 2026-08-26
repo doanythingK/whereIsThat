@@ -264,8 +264,7 @@ class DemoAppRepository implements AppRepository {
               space.deletedAt == null &&
               _members.values.any(
                 (member) =>
-                    member.spaceId == space.id &&
-                    member.userId == _user.id,
+                    member.spaceId == space.id && member.userId == _user.id,
               ),
         )
         .toList();
@@ -278,18 +277,16 @@ class DemoAppRepository implements AppRepository {
   }
 
   @override
-  Future<List<Space>> listDeletedSpaces() async =>
-      _spaces.values
-          .where(
-            (space) =>
-                space.deletedAt != null &&
-                _members.values.any(
-                  (member) =>
-                      member.spaceId == space.id &&
-                      member.userId == _user.id,
-                ),
-          )
-          .toList();
+  Future<List<Space>> listDeletedSpaces() async => _spaces.values
+      .where(
+        (space) =>
+            space.deletedAt != null &&
+            _members.values.any(
+              (member) =>
+                  member.spaceId == space.id && member.userId == _user.id,
+            ),
+      )
+      .toList();
 
   @override
   Future<Space> createSpace({
@@ -530,8 +527,7 @@ class DemoAppRepository implements AppRepository {
     final locations = _locations.values
         .where(
           (location) =>
-              location.floorPlanId == current.id &&
-              location.deletedAt == null,
+              location.floorPlanId == current.id && location.deletedAt == null,
         )
         .toList();
 
@@ -541,14 +537,12 @@ class DemoAppRepository implements AppRepository {
     for (final location in locations) {
       final items = _items.values
           .where(
-            (item) =>
-                item.locationId == location.id && item.deletedAt == null,
+            (item) => item.locationId == location.id && item.deletedAt == null,
           )
           .toList();
       _locationRecovery[location.id] = _items.values
           .where(
-            (item) =>
-                item.locationId == location.id && item.deletedAt == null,
+            (item) => item.locationId == location.id && item.deletedAt == null,
           )
           .map((item) => item.id)
           .toList();
@@ -680,8 +674,7 @@ class DemoAppRepository implements AppRepository {
     final purgeAt = now.add(const Duration(days: 30));
     final items = _items.values
         .where(
-          (item) =>
-              item.locationId == current.id && item.deletedAt == null,
+          (item) => item.locationId == current.id && item.deletedAt == null,
         )
         .toList();
     _locationRecovery[current.id] = items.map((item) => item.id).toList();
@@ -721,10 +714,7 @@ class DemoAppRepository implements AppRepository {
           item.spaceId == current.spaceId &&
           item.locationId == null &&
           item.deletedAt == null) {
-        _items[item.id] = item.copyWith(
-          locationId: current.id,
-          updatedAt: now,
-        );
+        _items[item.id] = item.copyWith(locationId: current.id, updatedAt: now);
       }
     }
   }
@@ -875,10 +865,9 @@ class DemoAppRepository implements AppRepository {
       throw const AppException('복구 가능 기간이 지났습니다.');
     }
     final oldLocationId = current.locationId;
-    final location = oldLocationId == null
-        ? null
-        : _locations[oldLocationId];
-    final validLocationId = location != null &&
+    final location = oldLocationId == null ? null : _locations[oldLocationId];
+    final validLocationId =
+        location != null &&
             location.deletedAt == null &&
             location.spaceId == current.spaceId
         ? location.id
@@ -926,7 +915,8 @@ class DemoAppRepository implements AppRepository {
     final category = current.categoryId == null
         ? null
         : _categories[current.categoryId!];
-    final targetCategoryId = category == null ||
+    final targetCategoryId =
+        category == null ||
             (category.spaceId != null && category.spaceId != targetSpaceId)
         ? null
         : current.categoryId;

@@ -91,16 +91,16 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
     }
     final quantity = double.tryParse(_quantityController.text.trim());
     if (quantity == null || !quantity.isFinite || quantity < 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(context.l10n.invalidQuantity)),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(context.l10n.invalidQuantity)));
       return;
     }
     setState(() => _saving = true);
     final now = DateTime.now().toUtc();
     final old = widget.item;
     final persisted = _persistedItem;
-    final base = (persisted ?? old)?.copyWith(
+    final base =
+        (persisted ?? old)?.copyWith(
           photos: List<ItemPhoto>.from(_existingPhotos),
         ) ??
         Item(
@@ -113,49 +113,43 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
           updatedAt: now,
           photos: const [],
         );
-    final locationState = ref.read(
-      locationsForSpaceProvider(widget.spaceId),
-    );
+    final locationState = ref.read(locationsForSpaceProvider(widget.spaceId));
     final locationId = locationState.hasValue
         ? (locationState.value ?? const <Location>[]).any(
                 (location) => location.id == _locationId,
               )
-            ? _locationId
-            : null
+              ? _locationId
+              : null
         : _locationId;
     final categoryState = ref.read(categoriesProvider(widget.spaceId));
     final categoryId = categoryState.hasValue
         ? (categoryState.value ?? const <Category>[]).any(
                 (category) => category.id == _categoryId,
               )
-            ? _categoryId
-            : null
+              ? _categoryId
+              : null
         : _categoryId;
-    final item =
-        base.copyWith(
-          name: name,
-          quantity: quantity,
-          unit: _unitController.text.trim().isEmpty
-              ? null
-              : _unitController.text.trim(),
-          locationId: locationId,
-          categoryId: categoryId,
-          detailLocation: _detailController.text.trim().isEmpty
-              ? null
-              : _detailController.text.trim(),
-          memo: _memoController.text.trim().isEmpty
-              ? null
-              : _memoController.text.trim(),
-          visibility: _visibility,
-          ownerUserId: _visibility == 'private' ? _ownerUserId : null,
-        );
+    final item = base.copyWith(
+      name: name,
+      quantity: quantity,
+      unit: _unitController.text.trim().isEmpty
+          ? null
+          : _unitController.text.trim(),
+      locationId: locationId,
+      categoryId: categoryId,
+      detailLocation: _detailController.text.trim().isEmpty
+          ? null
+          : _detailController.text.trim(),
+      memo: _memoController.text.trim().isEmpty
+          ? null
+          : _memoController.text.trim(),
+      visibility: _visibility,
+      ownerUserId: _visibility == 'private' ? _ownerUserId : null,
+    );
     try {
       var saved = await ref
           .read(workspaceActionsProvider)
-          .saveItem(
-            item,
-            isNew: old == null && persisted == null,
-          );
+          .saveItem(item, isNew: old == null && persisted == null);
       saved = saved.copyWith(photos: List<ItemPhoto>.from(_existingPhotos));
       _persistedItem = saved;
       while (_pendingPhotos.isNotEmpty) {
@@ -281,16 +275,13 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
     final locations = ref.watch(locationsForSpaceProvider(widget.spaceId));
     final categoriesState = ref.watch(categoriesProvider(widget.spaceId));
     final categories = categoriesState.value ?? const <Category>[];
-    final locationValues =
-        locations.value ?? const <Location>[];
-    final selectedLocationId = locationValues.any(
-      (location) => location.id == _locationId,
-    )
+    final locationValues = locations.value ?? const <Location>[];
+    final selectedLocationId =
+        locationValues.any((location) => location.id == _locationId)
         ? _locationId
         : null;
-    final selectedCategoryId = categories.any(
-      (category) => category.id == _categoryId,
-    )
+    final selectedCategoryId =
+        categories.any((category) => category.id == _categoryId)
         ? _categoryId
         : null;
     final membersState = ref.watch(spaceMembersProvider(widget.spaceId));
@@ -303,8 +294,7 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
         ? members
         : members.where((member) => member.userId == currentUserId).toList();
     final selectionUnavailable =
-        (_locationId != null &&
-            (locations.isLoading || locations.hasError)) ||
+        (_locationId != null && (locations.isLoading || locations.hasError)) ||
         (_categoryId != null &&
             (categoriesState.isLoading || categoriesState.hasError)) ||
         (_visibility == 'private' &&
@@ -487,9 +477,9 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
                     });
                   } catch (error) {
                     if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text(error.toString())),
-                      );
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(SnackBar(content: Text(error.toString())));
                     }
                   }
                 },
@@ -508,17 +498,16 @@ class _ItemEditorSheetState extends ConsumerState<ItemEditorSheet> {
                       _primaryPhotoId = photo.id;
                       _existingPhotos = _existingPhotos
                           .map(
-                            (entry) => entry.copyWith(
-                              isPrimary: entry.id == photo.id,
-                            ),
+                            (entry) =>
+                                entry.copyWith(isPrimary: entry.id == photo.id),
                           )
                           .toList();
                     });
                   } catch (error) {
                     if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text(error.toString())),
-                      );
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(SnackBar(content: Text(error.toString())));
                     }
                   }
                 },

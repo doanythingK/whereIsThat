@@ -168,7 +168,8 @@ class _ChecklistPageState extends ConsumerState<ChecklistPage> {
     );
     final linkedItems = linkedItemsState.value ?? const <Item>[];
     final existingLinkedItemId = existing?.linkedItemId;
-    String? linkedItemId = linkedItemsState.hasValue &&
+    String? linkedItemId =
+        linkedItemsState.hasValue &&
             existingLinkedItemId != null &&
             !linkedItems.any((item) => item.id == existingLinkedItemId)
         ? null
@@ -178,9 +179,8 @@ class _ChecklistPageState extends ConsumerState<ChecklistPage> {
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
-          final selectedLinkedItemId = linkedItems.any(
-            (item) => item.id == linkedItemId,
-          )
+          final selectedLinkedItemId =
+              linkedItems.any((item) => item.id == linkedItemId)
               ? linkedItemId
               : null;
           return AlertDialog(

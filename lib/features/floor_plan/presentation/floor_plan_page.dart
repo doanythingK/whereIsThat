@@ -904,9 +904,8 @@ class _FloorPlanPainter extends CustomPainter {
     final wallPaint = Paint()
       ..color = const Color(0xFF334155)
       ..strokeWidth = 4;
-    final walls = _layoutList(plan.layoutData['walls']).map(
-      (value) => value.toString(),
-    );
+    final walls = _layoutList(plan.layoutData['walls'])
+        .map((value) => value.toString());
     for (final key in walls) {
       final parts = key.split(':');
       if (parts.length != 2) continue;

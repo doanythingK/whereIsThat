@@ -262,9 +262,7 @@ class MorePage extends ConsumerWidget {
                             members = members
                                 .map(
                                   (entry) => entry.id == member.id
-                                      ? entry.copyWith(
-                                          displayName: displayName,
-                                        )
+                                      ? entry.copyWith(displayName: displayName)
                                       : entry,
                                 )
                                 .toList();
@@ -808,9 +806,7 @@ class MorePage extends ConsumerWidget {
                 ),
                 onTap: () async {
                   try {
-                    await ref
-                        .read(authActionsProvider)
-                        .linkIdentity(entry.$1);
+                    await ref.read(authActionsProvider).linkIdentity(entry.$1);
                     if (context.mounted) Navigator.pop(context);
                   } catch (error) {
                     _showError(context, error);
