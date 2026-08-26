@@ -276,7 +276,9 @@ class _ChecklistPageState extends ConsumerState<ChecklistPage> {
     if (!mounted) return;
     late List<ChecklistItem> currentItems;
     try {
-      currentItems = await ref.read(checklistItemsProvider(checklist.id).future);
+      currentItems = await ref.read(
+        checklistItemsProvider(checklist.id).future,
+      );
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context)

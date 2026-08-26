@@ -60,7 +60,8 @@ void main() {
       'restoring a floor plan does not restore an independently deleted location',
       () async {
         final repository = DemoAppRepository();
-        final firstPlan = (await repository.listFloorPlans('demo-space')).single;
+        final firstPlan =
+            (await repository.listFloorPlans('demo-space')).single;
         final secondPlan = await repository.createFloorPlan(
           spaceId: 'demo-space',
           name: '2층',
@@ -89,25 +90,29 @@ void main() {
       },
     );
 
-    test('restoring an item clears a location deleted after the item', () async {
-      final repository = DemoAppRepository();
-      final location = (await repository.listLocations('demo-floor-plan')).single;
-      final item = (await repository.listItems('demo-space'))
-          .singleWhere((entry) => entry.locationId == location.id);
+    test(
+      'restoring an item clears a location deleted after the item',
+      () async {
+        final repository = DemoAppRepository();
+        final location =
+            (await repository.listLocations('demo-floor-plan')).single;
+        final item = (await repository.listItems('demo-space'))
+            .singleWhere((entry) => entry.locationId == location.id);
 
-      await repository.softDeleteItem(item);
-      await repository.softDeleteLocation(location);
-      final deletedItem = (await repository.listDeletedItems('demo-space'))
-          .singleWhere((entry) => entry.id == item.id);
-      await repository.restoreItem(deletedItem);
+        await repository.softDeleteItem(item);
+        await repository.softDeleteLocation(location);
+        final deletedItem = (await repository.listDeletedItems('demo-space'))
+            .singleWhere((entry) => entry.id == item.id);
+        await repository.restoreItem(deletedItem);
 
-      expect(
-        (await repository.listItems('demo-space'))
-            .singleWhere((entry) => entry.id == item.id)
-            .locationId,
-        isNull,
-      );
-    });
+        expect(
+          (await repository.listItems('demo-space'))
+              .singleWhere((entry) => entry.id == item.id)
+              .locationId,
+          isNull,
+        );
+      },
+    );
 
     test('moving an item clears a source-space category', () async {
       final repository = DemoAppRepository();

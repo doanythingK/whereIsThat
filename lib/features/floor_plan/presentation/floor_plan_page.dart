@@ -145,7 +145,9 @@ class _FloorPlanPageState extends ConsumerState<FloorPlanPage> {
         ),
       );
       if (mounted) {
-        ref.invalidate(itemsProvider((spaceId: location.spaceId, search: null)));
+        ref.invalidate(
+          itemsProvider((spaceId: location.spaceId, search: null)),
+        );
       }
     } else if (action == 'delete') {
       try {
@@ -568,7 +570,9 @@ class _FloorPlanPageState extends ConsumerState<FloorPlanPage> {
                     .where(
                       (plan) =>
                           plan.id ==
-                          (shouldUseFocusedPlan ? focusPlanId : _selectedPlanId),
+                          (shouldUseFocusedPlan
+                              ? focusPlanId
+                              : _selectedPlanId),
                     )
                     .firstOrNull ??
                 values.first;
@@ -705,7 +709,9 @@ class _FloorPlanPageState extends ConsumerState<FloorPlanPage> {
                                                 title: Text(location.name),
                                                 onTap: () {
                                                   Navigator.pop(context);
-                                                  _showLocationActions(location);
+                                                  _showLocationActions(
+                                                    location,
+                                                  );
                                                 },
                                               ),
                                           ],
